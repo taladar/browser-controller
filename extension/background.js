@@ -1,0 +1,627 @@
+/**
+ * Browser Controller — Firefox MV3 service worker.
+ *
+ * Connects to the native messaging host (browser-controller-mediator) and
+ * handles commands forwarded by the mediator to control windows and tabs.
+ *
+ * Protocol (mediator → extension):
+ *   Length-prefixed JSON messages, each a CliRequest:
+ *   { "request_id": "<uuid>", "type": "<CommandVariant>", ... }
+ *
+ * Protocol (extension → mediator):
+ *   On connect:  { "message_type": "Hello", "browser_name": "...", "browser_version": "..." }
+ *   On response: { "message_type": "Response", "request_id": "<uuid>",
+ *                  "outcome": { "status": "ok"|"err", "data": <CliResult>|<string> } }
+ */
+
+"use strict";
+
+/** Name registered in the native messaging host manifest. */
+const NATIVE_HOST = "browser_controller";
+
+/** Base reconnect delay in milliseconds. Doubles on each failure up to MAX_RECONNECT_DELAY. */
+const INITIAL_RECONNECT_DELAY_MS = 1000;
+const MAX_RECONNECT_DELAY_MS = 30_000;
+
+/** Tabs currently awaiting basic HTTP authentication (tracked via webRequest). */
+const pendingAuthTabs = new Set();
+
+
+/** Active port to the native messaging host (null when disconnected). */
+let nativePort = null;
+
+/** Current reconnect delay, grows with each failed attempt. */
+let reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
+
+/**
+ * The suffix Firefox appends to every window title, e.g. " — Firefox".
+ * Populated once on first connection from browser.runtime.getBrowserInfo().
+ * Used to anchor the titlePreface extraction in extractTitlePreface().
+ */
+let windowTitleSuffix = null;
+
+// ---------------------------------------------------------------------------
+// Auth tracking
+// ---------------------------------------------------------------------------
+
+// Re-apply any stored titlePreface whenever a window appears (covers both
+// newly-created windows and windows restored by session restore).
+browser.windows.onCreated.addListener(async (win) => {
+  const prefix = await browser.sessions.getWindowValue(win.id, "titlePreface");
+  if (prefix !== undefined) {
+    await browser.windows.update(win.id, { titlePreface: prefix });
+  }
+});
+
+browser.webRequest.onAuthRequired.addListener(
+  (details) => {
+    if (details.tabId >= 0) {
+      pendingAuthTabs.add(details.tabId);
+    }
+  },
+  { urls: ["<all_urls>"] },
+);
+
+browser.webRequest.onCompleted.addListener(
+  (details) => {
+    pendingAuthTabs.delete(details.tabId);
+  },
+  { urls: ["<all_urls>"] },
+);
+
+browser.webRequest.onErrorOccurred.addListener(
+  (details) => {
+    pendingAuthTabs.delete(details.tabId);
+  },
+  { urls: ["<all_urls>"] },
+);
+
+// ---------------------------------------------------------------------------
+// Native messaging connection
+// ---------------------------------------------------------------------------
+
+/** Connect to the mediator and send the initial Hello message. */
+function connect() {
+  nativePort = browser.runtime.connectNative(NATIVE_HOST);
+
+  // Send Hello immediately so the mediator knows what browser is connected.
+  // Also construct an initial windowTitleSuffix from the browser name so that
+  // extractTitlePreface() can anchor its search before any ListWindows call.
+  // The suffix is derived from vendor + name (e.g. "Mozilla" + "Firefox" →
+  // " — Mozilla Firefox"); empty parts are skipped to handle forks cleanly.
+  browser.runtime.getBrowserInfo().then((info) => {
+    const brand = [info.vendor, info.name].filter(Boolean).join(" ");
+    windowTitleSuffix = ` \u2014 ${brand}`;
+    nativePort.postMessage({
+      message_type: "Hello",
+      browser_name: info.name,
+      browser_version: info.version,
+    });
+  });
+
+  nativePort.onMessage.addListener(handleNativeMessage);
+
+  nativePort.onDisconnect.addListener(() => {
+    nativePort = null;
+    const err = browser.runtime.lastError;
+    console.warn(
+      `[browser-controller] Disconnected from mediator${err ? ": " + err.message : ""}. Reconnecting in ${reconnectDelayMs}ms.`,
+    );
+    setTimeout(() => {
+      reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
+      connect();
+    }, reconnectDelayMs);
+  });
+
+  // Reset backoff on successful connection (assumed when first message arrives).
+  reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
+}
+
+// ---------------------------------------------------------------------------
+// Command dispatch
+// ---------------------------------------------------------------------------
+
+/**
+ * Handle an incoming native message (a CliRequest forwarded by the mediator).
+ *
+ * @param {object} msg - Deserialized CliRequest from the mediator.
+ */
+function handleNativeMessage(msg) {
+  const { request_id, type: commandType, ...params } = msg;
+
+  dispatch(commandType, params)
+    .then((data) => {
+      sendResponse(request_id, { status: "ok", data });
+    })
+    .catch((err) => {
+      sendResponse(request_id, { status: "err", data: String(err) });
+    });
+}
+
+/**
+ * Send a response back to the mediator.
+ *
+ * @param {string} requestId - The correlation ID from the original request.
+ * @param {{ status: "ok"|"err", data: unknown }} outcome
+ */
+function sendResponse(requestId, outcome) {
+  if (!nativePort) {
+    console.error(
+      `[browser-controller] Cannot send response for ${requestId}: not connected`,
+    );
+    return;
+  }
+  nativePort.postMessage({
+    message_type: "Response",
+    request_id: requestId,
+    outcome,
+  });
+}
+
+/**
+ * Dispatch a command to the appropriate browser API handler.
+ *
+ * @param {string} commandType - The `type` field from the CliRequest.
+ * @param {object} params - Remaining fields of the CliRequest.
+ * @returns {Promise<object>} Resolves with the CliResult payload.
+ */
+async function dispatch(commandType, params) {
+  switch (commandType) {
+    case "GetBrowserInfo":
+      return cmdGetBrowserInfo();
+    case "ListWindows":
+      return cmdListWindows();
+    case "OpenWindow":
+      return cmdOpenWindow();
+    case "CloseWindow":
+      return cmdCloseWindow(params.window_id);
+    case "SetWindowTitlePrefix":
+      return cmdSetWindowTitlePrefix(params.window_id, params.prefix);
+    case "RemoveWindowTitlePrefix":
+      return cmdRemoveWindowTitlePrefix(params.window_id);
+    case "ListTabs":
+      return cmdListTabs(params.window_id);
+    case "OpenTab":
+      return cmdOpenTab(
+        params.window_id,
+        params.insert_before_tab_id ?? null,
+        params.insert_after_tab_id ?? null,
+        params.url ?? null,
+      );
+    case "ActivateTab":
+      return cmdActivateTab(params.tab_id);
+    case "NavigateTab":
+      return cmdNavigateTab(params.tab_id, params.url);
+    case "GoBack":
+      return cmdGoBack(params.tab_id, params.steps);
+    case "GoForward":
+      return cmdGoForward(params.tab_id, params.steps);
+    case "CloseTab":
+      return cmdCloseTab(params.tab_id);
+    case "MoveTab":
+      return cmdMoveTab(params.tab_id, params.new_index);
+    default:
+      throw new Error(`Unknown command type: ${commandType}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Command implementations
+// ---------------------------------------------------------------------------
+
+/** Returns a BrowserInfo-shaped CliResult. */
+async function cmdGetBrowserInfo() {
+  const info = await browser.runtime.getBrowserInfo();
+  // pid is the browser's PID; we don't have direct access from the extension,
+  // so the mediator fills this in — return 0 as a sentinel.
+  return {
+    type: "BrowserInfo",
+    browser_name: info.name,
+    browser_version: info.version,
+    pid: 0,
+  };
+}
+
+/** Returns a Windows-shaped CliResult with tab summaries. */
+async function cmdListWindows() {
+  const windows = await browser.windows.getAll({ populate: true });
+
+  // Self-calibrate windowTitleSuffix from any window that has no prefix:
+  // if win.title starts with the active tab's title, the remainder is the suffix.
+  // This is authoritative — it doesn't depend on getBrowserInfo() name formatting.
+  if (!windowTitleSuffix) {
+    for (const win of windows) {
+      const activeTab = (win.tabs ?? []).find((t) => t.active);
+      if (activeTab?.title && win.title?.startsWith(activeTab.title)) {
+        windowTitleSuffix = win.title.substring(activeTab.title.length);
+        break;
+      }
+    }
+  }
+
+  return {
+    type: "Windows",
+    windows: windows.map(serializeWindowSummary),
+  };
+}
+
+/** Opens a new browser window and returns its ID. */
+async function cmdOpenWindow() {
+  const win = await browser.windows.create({});
+  return { type: "WindowId", window_id: win.id };
+}
+
+/** Closes a browser window. */
+async function cmdCloseWindow(windowId) {
+  await browser.windows.remove(windowId);
+  return { type: "Unit" };
+}
+
+/** Sets the titlePreface (Firefox title prefix) for a window. */
+async function cmdSetWindowTitlePrefix(windowId, prefix) {
+  await browser.windows.update(windowId, { titlePreface: prefix });
+  await browser.sessions.setWindowValue(windowId, "titlePreface", prefix);
+  return { type: "Unit" };
+}
+
+/** Removes the titlePreface from a window. */
+async function cmdRemoveWindowTitlePrefix(windowId) {
+  await browser.windows.update(windowId, { titlePreface: "" });
+  await browser.sessions.removeWindowValue(windowId, "titlePreface");
+  return { type: "Unit" };
+}
+
+/** Returns a Tabs-shaped CliResult with full tab details for all tabs in a window. */
+async function cmdListTabs(windowId) {
+  const tabs = await browser.tabs.query({ windowId });
+  return {
+    type: "Tabs",
+    tabs: await Promise.all(tabs.map(serializeTabDetails)),
+  };
+}
+
+/** Opens a new tab and returns its details. */
+async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url) {
+  const createProps = { windowId };
+  if (insertBeforeTabId !== null) {
+    const refTab = await browser.tabs.get(insertBeforeTabId);
+    createProps.index = refTab.index;
+  } else if (insertAfterTabId !== null) {
+    const refTab = await browser.tabs.get(insertAfterTabId);
+    createProps.index = refTab.index + 1;
+  }
+  if (url !== null) {
+    createProps.url = url;
+  }
+  const tab = await browser.tabs.create(createProps);
+  return { type: "Tab", ...await serializeTabDetails(tab) };
+}
+
+/** Closes a tab. */
+async function cmdCloseTab(tabId) {
+  await browser.tabs.remove(tabId);
+  return { type: "Unit" };
+}
+
+/**
+ * Navigate a tab's session history by `delta` steps and return the resulting
+ * tab details (including the new URL).
+ *
+ * First fetches the current tab state (including Navigation API history position
+ * where available).  If the Navigation API reports that the boundary in the
+ * requested direction is already reached (0 steps available), the current tab
+ * state is returned immediately — no event listener or timer is needed.
+ *
+ * When navigation will occur, a one-time tabs.onUpdated listener (filtered to
+ * URL changes for this tab) is registered before triggering history.go() so the
+ * URL change event cannot be missed.  The listener is removed once the URL
+ * changes.
+ *
+ * A 5 s fallback timer is set only when the Navigation API is unavailable
+ * (history_steps_back === null) and we therefore cannot guarantee that a URL
+ * change will occur.  When the Navigation API is available and steps > 0 the
+ * navigation is guaranteed to produce a URL change, so no timer is needed.
+ *
+ * @param {number} tabId
+ * @param {number} delta  Negative to go back, positive to go forward.
+ * @returns {Promise<object>}
+ */
+async function navigateHistory(tabId, delta) {
+  // Fetch the current tab state up-front.  serializeTabDetails queries the
+  // Navigation API (if available) giving us the current history position.
+  const tab = await browser.tabs.get(tabId);
+  const currentDetails = await serializeTabDetails(tab);
+
+  // When the Navigation API provided position data, check the boundary without
+  // waiting for any events.
+  if (currentDetails.history_steps_back !== null) {
+    const stepsAvailable = delta < 0
+      ? currentDetails.history_steps_back
+      : currentDetails.history_steps_forward;
+    if (stepsAvailable === 0) {
+      // Already at the boundary; no navigation will occur.
+      return { type: "Tab", ...currentDetails };
+    }
+  }
+
+  // Navigation will proceed; wait for the URL-change event.
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    async function finish() {
+      if (settled) return;
+      settled = true;
+      browser.tabs.onUpdated.removeListener(onUpdated);
+      if (fallbackTimer !== null) {
+        clearTimeout(fallbackTimer);
+      }
+      try {
+        const updatedTab = await browser.tabs.get(tabId);
+        resolve({ type: "Tab", ...await serializeTabDetails(updatedTab) });
+      } catch (err) {
+        reject(err);
+      }
+    }
+
+    function onUpdated(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.url !== undefined) {
+        finish();
+      }
+    }
+
+    // A fallback timer is only needed when the Navigation API is unavailable
+    // and we cannot guarantee that a URL-change event will arrive.
+    const fallbackTimer = currentDetails.history_steps_back === null
+      ? setTimeout(finish, 5000)
+      : null;
+
+    browser.tabs.onUpdated.addListener(onUpdated, { tabId, properties: ["url"] });
+
+    browser.scripting.executeScript({
+      target: { tabId },
+      func: (n) => { window.history.go(n); },
+      args: [delta],
+    }).catch((err) => {
+      if (!settled) {
+        settled = true;
+        browser.tabs.onUpdated.removeListener(onUpdated);
+        if (fallbackTimer !== null) {
+          clearTimeout(fallbackTimer);
+        }
+        reject(err);
+      }
+    });
+  });
+}
+
+/**
+ * Navigates backward in a tab's session history by the given number of steps
+ * and returns the resulting tab details.
+ *
+ * Uses window.history.go(-steps) so that all steps are skipped atomically,
+ * which is useful when intermediate pages redirect immediately forward again.
+ */
+async function cmdGoBack(tabId, steps) {
+  return navigateHistory(tabId, -steps);
+}
+
+/**
+ * Navigates forward in a tab's session history by the given number of steps
+ * and returns the resulting tab details.
+ *
+ * Uses window.history.go(steps) so that all steps are skipped atomically,
+ * which is useful when intermediate pages redirect immediately backward again.
+ */
+async function cmdGoForward(tabId, steps) {
+  return navigateHistory(tabId, steps);
+}
+
+/** Navigates an existing tab to a new URL and returns its updated details. */
+async function cmdNavigateTab(tabId, url) {
+  const tab = await browser.tabs.update(tabId, { url });
+  return { type: "Tab", ...await serializeTabDetails(tab) };
+}
+
+/** Activates a tab, making it the focused tab in its window. */
+async function cmdActivateTab(tabId) {
+  const tab = await browser.tabs.update(tabId, { active: true });
+  return { type: "Tab", ...await serializeTabDetails(tab) };
+}
+
+/** Moves a tab to a new index within its window and returns its updated details. */
+async function cmdMoveTab(tabId, newIndex) {
+  const [moved] = await browser.tabs.move(tabId, { index: newIndex });
+  return { type: "Tab", ...await serializeTabDetails(moved) };
+}
+
+// ---------------------------------------------------------------------------
+// Serialization helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Recover the titlePreface from a populated window object.
+ *
+ * Firefox window titles have the form:
+ *   {titlePreface}{activeTab.title}[{browserSuffix}]
+ *
+ * Since titlePreface is write-only in the API (not returned by windows.getAll),
+ * we extract it by finding where the active tab's title ends in the window title.
+ * Three strategies are tried in order, from most to least anchored:
+ *
+ * 1. endsWith(tabTitle + browserSuffix) — most precise; rules out false matches
+ *    where the tab title also appears inside the prefix.
+ * 2. endsWith(tabTitle) — handles the case where win.title does not include the
+ *    browser suffix (the Firefox extension API may strip it).
+ * 3. lastIndexOf(tabTitle) — last resort for unusual title formats; the rightmost
+ *    occurrence is almost always the real tab title, not something in the prefix.
+ *
+ * Returns null when no prefix is present or it cannot be determined.
+ *
+ * @param {browser.windows.Window} win - Must be populated (tabs present).
+ * @returns {string|null}
+ */
+function extractTitlePreface(win) {
+  const activeTab = (win.tabs ?? []).find((t) => t.active);
+  const tabTitle = activeTab?.title;
+  if (!tabTitle || !win.title) {
+    return null;
+  }
+
+  // Strategy 1: anchored to browser suffix (e.g. " — Firefox").
+  if (windowTitleSuffix) {
+    const needle = tabTitle + windowTitleSuffix;
+    if (win.title.endsWith(needle)) {
+      const len = win.title.length - needle.length;
+      return len > 0 ? win.title.substring(0, len) : null;
+    }
+  }
+
+  // Strategy 2: win.title ends directly with the tab title (no browser suffix).
+  if (win.title.endsWith(tabTitle)) {
+    const len = win.title.length - tabTitle.length;
+    return len > 0 ? win.title.substring(0, len) : null;
+  }
+
+  // Strategy 3: rightmost occurrence of the tab title anywhere in win.title.
+  const idx = win.title.lastIndexOf(tabTitle);
+  return idx > 0 ? win.title.substring(0, idx) : null;
+}
+
+/**
+ * Serialize a browser `windows.Window` object to a `WindowSummary`.
+ *
+ * @param {browser.windows.Window} win
+ * @returns {object}
+ */
+function serializeWindowSummary(win) {
+  return {
+    id: win.id,
+    title: win.title ?? "",
+    title_prefix: extractTitlePreface(win),
+    is_focused: win.focused,
+    state: win.state ?? "normal",
+    tabs: (win.tabs ?? []).map(serializeTabSummary),
+  };
+}
+
+/**
+ * Serialize a browser `tabs.Tab` to a `TabSummary` (brief view for window listings).
+ *
+ * @param {browser.tabs.Tab} tab
+ * @returns {object}
+ */
+function serializeTabSummary(tab) {
+  return {
+    index: tab.index,
+    title: tab.title ?? "",
+    url: tab.url ?? "",
+    is_active: tab.active,
+  };
+}
+
+/**
+ * Retrieve session history metrics for a tab by injecting a content script.
+ *
+ * Always returns `history_length` (from `window.history.length`).
+ * Also returns `history_steps_back` and `history_steps_forward` when the
+ * Navigation API (`window.navigation`) is available (Firefox 125+); both are
+ * `null` on older Firefox or privileged pages.
+ *
+ * Returns all-zero/null for discarded tabs or any tab that does not permit
+ * content script injection.
+ *
+ * @param {number} tabId
+ * @param {boolean} isDiscarded
+ * @returns {Promise<{history_length: number, history_steps_back: number|null, history_steps_forward: number|null, history_hidden_count: number|null}>}
+ */
+async function getTabHistoryInfo(tabId, isDiscarded) {
+  if (isDiscarded) {
+    return { history_length: 0, history_steps_back: null, history_steps_forward: null, history_hidden_count: null };
+  }
+  try {
+    const results = await browser.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const jointTotal = window.history.length;
+        if (window.navigation?.entries) {
+          const entries = window.navigation.entries();
+          const pos = window.navigation.currentEntry.index;
+          return {
+            total: entries.length,
+            back: pos,
+            forward: entries.length - 1 - pos,
+            hidden: jointTotal - entries.length,
+          };
+        }
+        return { total: jointTotal, back: null, forward: null, hidden: null };
+      },
+    });
+    const [first] = results;
+    const info = first?.result;
+    return {
+      history_length: info?.total ?? 0,
+      history_steps_back: info?.back ?? null,
+      history_steps_forward: info?.forward ?? null,
+      history_hidden_count: info?.hidden ?? null,
+    };
+  } catch (_err) {
+    return { history_length: 0, history_steps_back: null, history_steps_forward: null, history_hidden_count: null };
+  }
+}
+
+/**
+ * Serialize a browser `tabs.Tab` to a `TabDetails` (full view).
+ *
+ * @param {browser.tabs.Tab} tab
+ * @returns {Promise<object>}
+ */
+async function serializeTabDetails(tab) {
+  const { history_length, history_steps_back, history_steps_forward, history_hidden_count } =
+    await getTabHistoryInfo(tab.id, tab.discarded ?? false);
+  return {
+    id: tab.id,
+    index: tab.index,
+    window_id: tab.windowId,
+    title: tab.title ?? "",
+    url: tab.url ?? "",
+    is_active: tab.active,
+    is_pinned: tab.pinned,
+    is_discarded: tab.discarded ?? false,
+    is_audible: tab.audible ?? false,
+    is_muted: tab.mutedInfo?.muted ?? false,
+    status: tab.status ?? "complete",
+    has_attention: tab.attention ?? false,
+    is_awaiting_auth: pendingAuthTabs.has(tab.id),
+    is_in_reader_mode: tab.isInReaderMode ?? false,
+    incognito: tab.incognito,
+    history_length,
+    history_steps_back,
+    history_steps_forward,
+    history_hidden_count,
+  };
+}
+
+/**
+ * Re-apply stored titlePreface values to all currently open windows.
+ *
+ * Called once on startup to handle windows that already existed before the
+ * extension started (e.g. the extension was reloaded while Firefox was running).
+ * Windows that appear later — including those created during ongoing session
+ * restore — are handled by the windows.onCreated listener registered above.
+ */
+async function restoreTitlePrefaces() {
+  const windows = await browser.windows.getAll();
+  for (const win of windows) {
+    const prefix = await browser.sessions.getWindowValue(win.id, "titlePreface");
+    if (prefix !== undefined) {
+      await browser.windows.update(win.id, { titlePreface: prefix });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------------
+
+connect();
+restoreTitlePrefaces();

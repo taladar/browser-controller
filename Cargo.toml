@@ -1,53 +1,29 @@
-[package]
-name = "browser-controller"
-description = "Allows controlling the windows and tabs of a web browser via a CLI emitting JSON"
-readme = "README.md"
-license = "MIT OR Apache-2.0"
+[workspace]
+members = ["cli", "mediator", "types"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 authors = ["Matthias Hörmann <mhoermann@gmail.com>"]
 edition = "2024"
-resolver = "3"
 rust-version = "1.94.0"
+license = "MIT OR Apache-2.0"
 publish = true
 repository = "https://github.com/taladar/browser-controller"
-keywords = ["automation", "browser"]
-categories = ["command-line-utilities"]
-exclude = [
-    "push-deploy-branches.sh",
-    ".env",
-    "tarpaulin-report.html",
-    "tarpaulin-report.json",
-]
 
-[package.metadata.deb]
-name = "browser-controller"
-depends = "$auto"
-extended-description = "Allows controlling the windows and tabs of a web browser via a CLI emitting JSON"
-section = "database"
-copyright = "2026, Matthias Hörmann <mhoermann@gmail.com>"
-assets = [[ "target/release/browser-controller", "usr/bin/", "755" ]]
-maintainer-scripts = "maintainer-scripts"
-changelog = "changelog"
-revision = "1"
-
-[package.metadata.rpm.cargo]
-buildflags = ["--release"]
-
-[package.metadata.rpm.targets]
-browser-controller = { path = "/usr/bin/browser-controller" }
-
-[package.metadata.generate-rpm]
-assets = [
-    { source = "target/release/browser-controller", dest = "/usr/bin/browser-controller", mode = "755" },
-]
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
+[workspace.dependencies]
+browser-controller-types = { path = "types" }
 clap = { version = "4.6.0", features = ["derive", "cargo"] }
 clap_complete = "4.6.0"
 clap_mangen = "0.2.33"
+directories = "5.0"
+fs-err = "2.11"
 humantime = "2.3.0"
 log-panics = { version = "2.1.0", features = ["with-backtrace"] }
+nix = { version = "0.29", features = ["process"] }
+pretty_assertions = "1.4.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 thiserror = "2.0.18"
 time = { version = "0.3.47", features = ["macros", "parsing"] }
 tokio = { version = "1.50.0", features = ["full"] }
@@ -55,15 +31,9 @@ tracing = "0.1.44"
 tracing-appender = "0.2.4"
 tracing-journald = "0.3.2"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "tracing-log"] }
+uuid = { version = "1.11", features = ["v4"] }
 
-[dev-dependencies]
-pretty_assertions = { version = "1.4.1" }
-
-[profile.release]
-# do not strip debug info from release builds, useful for debugging those, cargo-flamegraph profiling or similar use cases
-debug = true
-
-[lints.rust]
+[workspace.lints.rust]
 absolute_paths_not_starting_with_crate = "deny"
 ambiguous_negative_literals = "deny"
 closure_returning_async_block = "warn"
@@ -100,7 +70,7 @@ unused_parens = "deny"
 variant_size_differences = "warn"
 while_true = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
 arithmetic_side_effects = "deny"
@@ -269,7 +239,11 @@ wildcard_dependencies = "deny"
 wildcard_imports = "deny"
 zero_sized_map_values = "deny"
 
-[lints.rustdoc]
+[workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 missing_crate_level_docs = "warn"
 unescaped_backticks = "warn"
+
+[profile.release]
+# do not strip debug info from release builds, useful for debugging those, cargo-flamegraph profiling or similar use cases
+debug = true

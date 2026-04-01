@@ -1,0 +1,60 @@
+[package]
+name = "browser-controller-mediator"
+description = "Native messaging host that bridges the browser-controller Firefox extension to the CLI via Unix Domain Socket"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+keywords = ["automation", "browser"]
+categories = ["command-line-utilities"]
+
+[package.metadata.deb]
+name = "browser-controller-mediator"
+depends = "$auto"
+extended-description = "Native messaging host that bridges the browser-controller Firefox extension to the CLI via Unix Domain Socket"
+section = "utils"
+copyright = "2026, Matthias Hörmann <mhoermann@gmail.com>"
+assets = [[ "target/release/browser-controller-mediator", "usr/bin/", "755" ]]
+maintainer-scripts = "maintainer-scripts"
+changelog = "changelog"
+revision = "1"
+
+[package.metadata.rpm.cargo]
+buildflags = ["--release"]
+
+[package.metadata.rpm.targets]
+browser-controller-mediator = { path = "/usr/bin/browser-controller-mediator" }
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/browser-controller-mediator", dest = "/usr/bin/browser-controller-mediator", mode = "755" },
+]
+
+[[bin]]
+name = "browser-controller-mediator"
+path = "src/main.rs"
+
+[dependencies]
+browser-controller-types = { workspace = true }
+directories = { workspace = true }
+fs-err = { workspace = true }
+log-panics = { workspace = true }
+nix = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tracing-journald = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

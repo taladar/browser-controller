@@ -1,0 +1,71 @@
+[package]
+name = "browser-controller-cli"
+description = "CLI to control Firefox windows and tabs via the browser-controller mediator"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = true
+repository.workspace = true
+keywords = ["automation", "browser"]
+categories = ["command-line-utilities"]
+readme = "README.md"
+exclude = [
+    "push-deploy-branches.sh",
+    ".env",
+    "tarpaulin-report.html",
+    "tarpaulin-report.json",
+]
+
+[package.metadata.deb]
+name = "browser-controller"
+depends = "$auto"
+extended-description = "CLI to control Firefox windows and tabs via the browser-controller mediator"
+section = "utils"
+copyright = "2026, Matthias Hörmann <mhoermann@gmail.com>"
+assets = [[ "target/release/browser-controller", "usr/bin/", "755" ]]
+maintainer-scripts = "maintainer-scripts"
+changelog = "changelog"
+revision = "1"
+
+[package.metadata.rpm.cargo]
+buildflags = ["--release"]
+
+[package.metadata.rpm.targets]
+browser-controller = { path = "/usr/bin/browser-controller" }
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/browser-controller", dest = "/usr/bin/browser-controller", mode = "755" },
+]
+
+[[bin]]
+name = "browser-controller"
+path = "src/main.rs"
+
+[dependencies]
+browser-controller-types = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }
+directories = { workspace = true }
+fs-err = { workspace = true }
+log-panics = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tracing-journald = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true
