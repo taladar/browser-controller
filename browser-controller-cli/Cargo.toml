@@ -12,8 +12,10 @@ keywords = ["browser", "automation", "firefox", "chrome", "tabs"]
 categories = ["command-line-utilities"]
 readme = "README.md"
 exclude = [
-    "push-deploy-branches.sh",
     ".env",
+    "cliff.toml",
+    "cliff-debian.toml",
+    "maintainer-scripts",
     "tarpaulin-report.html",
     "tarpaulin-report.json",
 ]

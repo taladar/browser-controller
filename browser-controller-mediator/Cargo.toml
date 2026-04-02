@@ -10,6 +10,14 @@ publish.workspace = true
 repository.workspace = true
 keywords = ["browser", "automation", "native-messaging", "firefox", "chrome"]
 categories = ["command-line-utilities"]
+exclude = [
+    ".env",
+    "cliff.toml",
+    "cliff-debian.toml",
+    "maintainer-scripts",
+    "tarpaulin-report.html",
+    "tarpaulin-report.json",
+]
 
 [package.metadata.deb]
 name = "browser-controller-mediator"
