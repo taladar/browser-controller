@@ -6,7 +6,7 @@ permissions:
 on:
   push:
     tags:
-      - 'browser-controller_[0-9]+.[0-9]+.[0-9]+'
+      - 'browser_controller_[0-9]+.[0-9]+.[0-9]+'
 
 jobs:
   create-release:
@@ -15,11 +15,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: taiki-e/create-gh-release-action@v1
         with:
-          prefix: 'browser-controller_'
-          # (optional) Path to changelog.
+          prefix: 'browser_controller_'
+          # Path to workspace changelog for the release body.
           changelog: CHANGELOG.md
           # (required) GitHub token for creating GitHub Releases.
           token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package browser extension
+        run: ./package-extension.sh
+      - name: Upload extension packages to release
+        run: gh release upload "${{ github.ref_name }}" dist/*.xpi dist/*.zip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   upload-assets:
     needs: create-release
@@ -51,15 +57,12 @@ jobs:
         uses: taiki-e/setup-cross-toolchain-action@v1
         with:
           target: ${{ matrix.target }}
-
         if: startsWith(matrix.os, 'ubuntu')
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
-          # (required) Comma-separated list of binary names (non-extension portion of filename) to build and upload.
-          # Note that glob pattern is not supported yet.
-          bin: browser-controller
-          # (optional) Comma-separated list of additional files to be included to archive.
-          # Note that glob pattern is not supported yet.
+          # Build and upload both the CLI and the native messaging host mediator.
+          bin: browser-controller,browser-controller-mediator
+          # (optional) Comma-separated list of additional files to be included in the archive.
           include: README.md,CHANGELOG.md
           # (optional) Whether to create the leading directory in the archive or not. default to false.
           leading-dir: true

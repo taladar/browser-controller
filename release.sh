@@ -39,9 +39,12 @@ done
 
 cargo set-version --bump "${level}"
 
+# Read the new workspace version once; used for the extension manifest, workspace
+# CHANGELOG, and the workspace-level release tag.
+workspace_version="$(cargo get workspace.package.version)"
+
 # Update extension/manifest.json to match the new workspace version.
-extension_version="$(cargo get workspace.package.version)"
-jq --arg v "${extension_version}" '.version = $v' extension/manifest.json | sponge extension/manifest.json
+jq --arg v "${workspace_version}" '.version = $v' extension/manifest.json | sponge extension/manifest.json
 
 for p in "${workspace_crates[@]}"; do
   p_tag_basename="${p//-/_}"
@@ -73,11 +76,14 @@ for p in "${workspace_binary_crates[@]}"; do
   popd >/dev/null
 done
 
+git cliff --prepend CHANGELOG.md -u -t "browser_controller_${workspace_version}"
+rumdl fmt --fix CHANGELOG.md
+
 cargo build
 
 "$(dirname "${BASH_SOURCE[0]}")/package-extension.sh"
 
-git add Cargo.toml Cargo.lock extension/manifest.json
+git add Cargo.toml Cargo.lock CHANGELOG.md extension/manifest.json
 
 for p in "${workspace_crates[@]}"; do
   pushd "${p}" >/dev/null
@@ -101,8 +107,12 @@ for p in "${workspace_crates[@]}"; do
   popd >/dev/null
 done
 
+# Workspace-level release tag, triggers the GitHub release workflow.
+git tag "browser_controller_${workspace_version}"
+
 for remote in $(git remote); do
   git push "${remote}"
+  git push "${remote}" "browser_controller_${workspace_version}"
   for p in "${workspace_crates[@]}"; do
     p_tag_basename="${p//-/_}"
     pushd "${p}" >/dev/null
