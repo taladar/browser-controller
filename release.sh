@@ -52,7 +52,12 @@ for p in "${workspace_crates[@]}"; do
   version="$(cargo get package.version)"
   git cliff --config cliff.toml -u -t "${p_tag_basename}_${version}" --context --output context.json
   if [[ "$(cat context.json)" == "[]" ]]; then
-    sed -i "1s|^|## ${version} - $(date -u +%Y-%m-%dT%H:%M:%SZ)\n\nNo changes in this crate; see other browser-controller components.\n\n|" CHANGELOG.md
+    {
+      printf '# Changelog\n\n'
+      printf '## %s - %s\n\n' "${version}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      printf 'No changes in this crate; see other browser-controller components.\n\n'
+      tail -n +3 CHANGELOG.md
+    } | sponge CHANGELOG.md
   else
     git cliff --prepend CHANGELOG.md -u -t "${p_tag_basename}_${version}"
   fi
