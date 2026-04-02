@@ -306,6 +306,18 @@ pub enum TabsCommand {
         /// Internal browser tab ID to close (shown in `tabs list`).
         tab_id: u32,
     },
+    /// Pin a tab.
+    Pin {
+        /// Internal browser tab ID to pin (shown in `tabs list`).
+        #[clap(long)]
+        tab_id: u32,
+    },
+    /// Unpin a tab.
+    Unpin {
+        /// Internal browser tab ID to unpin (shown in `tabs list`).
+        #[clap(long)]
+        tab_id: u32,
+    },
     /// Move a tab to a new position within its window.
     Move {
         /// Internal browser tab ID to move (shown in `tabs list`).
@@ -872,6 +884,8 @@ fn tabs_command_to_cli(cmd: TabsCommand) -> CliCommand {
         TabsCommand::Activate { tab_id } => CliCommand::ActivateTab { tab_id },
         TabsCommand::Navigate { tab_id, url } => CliCommand::NavigateTab { tab_id, url },
         TabsCommand::Close { tab_id } => CliCommand::CloseTab { tab_id },
+        TabsCommand::Pin { tab_id } => CliCommand::PinTab { tab_id },
+        TabsCommand::Unpin { tab_id } => CliCommand::UnpinTab { tab_id },
         TabsCommand::Move { tab_id, new_index } => CliCommand::MoveTab { tab_id, new_index },
         TabsCommand::Back { tab_id, steps } => CliCommand::GoBack { tab_id, steps },
         TabsCommand::Forward { tab_id, steps } => CliCommand::GoForward { tab_id, steps },

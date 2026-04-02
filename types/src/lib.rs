@@ -288,6 +288,16 @@ pub enum CliCommand {
         /// The ID of the tab to close.
         tab_id: u32,
     },
+    /// Pin a tab.
+    PinTab {
+        /// The ID of the tab to pin.
+        tab_id: u32,
+    },
+    /// Unpin a tab.
+    UnpinTab {
+        /// The ID of the tab to unpin.
+        tab_id: u32,
+    },
     /// Move a tab to a new position within its window.
     MoveTab {
         /// The ID of the tab to move.

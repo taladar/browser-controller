@@ -88,7 +88,15 @@ browser.webRequest.onErrorOccurred.addListener(
  */
 function pushEvent(payload) {
   if (nativePort) {
-    nativePort.postMessage({ message_type: "Event", event: payload });
+    try {
+      nativePort.postMessage({ message_type: "Event", event: payload });
+    } catch (err) {
+      console.error(`[browser-controller] Failed to push event ${payload.type}`, {
+        error: String(err),
+        stack: err?.stack,
+        payload,
+      });
+    }
   }
 }
 
@@ -154,6 +162,7 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 /** Connect to the mediator and send the initial Hello message. */
 function connect() {
+  console.info(`[browser-controller] Connecting to native host: ${NATIVE_HOST}`);
   nativePort = browser.runtime.connectNative(NATIVE_HOST);
 
   // Send Hello immediately so the mediator knows what browser is connected.
@@ -164,11 +173,18 @@ function connect() {
   browser.runtime.getBrowserInfo().then((info) => {
     const brand = [info.vendor, info.name].filter(Boolean).join(" ");
     windowTitleSuffix = ` \u2014 ${brand}`;
-    nativePort.postMessage({
+    const hello = {
       message_type: "Hello",
       browser_name: info.name,
       browser_vendor: info.vendor || null,
       browser_version: info.version,
+    };
+    console.info(`[browser-controller] Sending Hello`, hello);
+    nativePort.postMessage(hello);
+  }).catch((err) => {
+    console.error(`[browser-controller] Failed to get browser info for Hello`, {
+      error: String(err),
+      stack: err?.stack,
     });
   });
 
@@ -202,11 +218,24 @@ function connect() {
 function handleNativeMessage(msg) {
   const { request_id, type: commandType, ...params } = msg;
 
+  console.debug(
+    `[browser-controller] Received command: ${commandType}`,
+    { request_id, params },
+  );
+
   dispatch(commandType, params)
     .then((data) => {
+      console.debug(
+        `[browser-controller] Command succeeded: ${commandType}`,
+        { request_id, result_type: data?.type },
+      );
       sendResponse(request_id, { status: "ok", data });
     })
     .catch((err) => {
+      console.error(
+        `[browser-controller] Command failed: ${commandType}`,
+        { request_id, params, error: String(err), stack: err?.stack },
+      );
       sendResponse(request_id, { status: "err", data: String(err) });
     });
 }
@@ -224,11 +253,18 @@ function sendResponse(requestId, outcome) {
     );
     return;
   }
-  nativePort.postMessage({
-    message_type: "Response",
-    request_id: requestId,
-    outcome,
-  });
+  try {
+    nativePort.postMessage({
+      message_type: "Response",
+      request_id: requestId,
+      outcome,
+    });
+  } catch (err) {
+    console.error(
+      `[browser-controller] Failed to postMessage response for ${requestId}`,
+      { error: String(err), stack: err?.stack, outcome },
+    );
+  }
 }
 
 /**
@@ -271,6 +307,10 @@ async function dispatch(commandType, params) {
       return cmdGoForward(params.tab_id, params.steps);
     case "CloseTab":
       return cmdCloseTab(params.tab_id);
+    case "PinTab":
+      return cmdPinTab(params.tab_id);
+    case "UnpinTab":
+      return cmdUnpinTab(params.tab_id);
     case "MoveTab":
       return cmdMoveTab(params.tab_id, params.new_index);
     default:
@@ -374,6 +414,18 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url) {
 async function cmdCloseTab(tabId) {
   await browser.tabs.remove(tabId);
   return { type: "Unit" };
+}
+
+/** Pins a tab and returns its updated details. */
+async function cmdPinTab(tabId) {
+  const tab = await browser.tabs.update(tabId, { pinned: true });
+  return { type: "Tab", ...await serializeTabDetails(tab) };
+}
+
+/** Unpins a tab and returns its updated details. */
+async function cmdUnpinTab(tabId) {
+  const tab = await browser.tabs.update(tabId, { pinned: false });
+  return { type: "Tab", ...await serializeTabDetails(tab) };
 }
 
 /**

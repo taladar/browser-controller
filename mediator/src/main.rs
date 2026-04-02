@@ -121,7 +121,16 @@ async fn read_native_message(
     let len_usize = usize::try_from(len).unwrap_or(usize::MAX);
     let mut json_buf = vec![0u8; len_usize];
     reader.read_exact(&mut json_buf).await?;
-    let msg = serde_json::from_slice(&json_buf)?;
+    let json_str = std::str::from_utf8(&json_buf).unwrap_or("<invalid utf-8>");
+    tracing::debug!(json = %json_str, "Received native message from extension");
+    let msg = serde_json::from_slice(&json_buf).map_err(|e| {
+        tracing::error!(
+            error = %e,
+            json = %json_str,
+            "Failed to deserialize native message from extension",
+        );
+        Error::Json(e)
+    })?;
     Ok(Some(msg))
 }
 
