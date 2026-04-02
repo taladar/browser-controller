@@ -10,9 +10,11 @@
 
 use std::collections::HashMap;
 
-use browser_controller_types::{CliOutcome, CliRequest, CliResponse, ExtensionMessage};
+use browser_controller_types::{
+    BrowserEvent, CliOutcome, CliRequest, CliResponse, ExtensionMessage,
+};
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing_subscriber::{
     EnvFilter, Layer as _, Registry, filter::LevelFilter, layer::SubscriberExt as _,
     util::SubscriberInitExt as _,
@@ -186,6 +188,7 @@ async fn write_cli_response(
 async fn handle_cli_connection(
     conn: tokio::net::UnixStream,
     request_tx: mpsc::Sender<PendingRequest>,
+    event_tx: broadcast::Sender<BrowserEvent>,
 ) -> Result<(), Error> {
     let (read_half, mut write_half) = conn.into_split();
     let mut reader = tokio::io::BufReader::new(read_half);
@@ -193,6 +196,62 @@ async fn handle_cli_connection(
         let Some(cli_request) = read_cli_request(&mut reader).await? else {
             break;
         };
+
+        // SubscribeEvents is handled locally — stream events until the client disconnects.
+        if matches!(
+            &cli_request.command,
+            browser_controller_types::CliCommand::SubscribeEvents
+        ) {
+            let mut event_rx = event_tx.subscribe();
+            // Spawn a task that signals when the client closes the connection.
+            let (disconnect_tx, disconnect_rx) = oneshot::channel::<()>();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 1];
+                loop {
+                    match reader.read(&mut buf).await {
+                        Ok(0) | Err(_) => {
+                            if disconnect_tx.send(()).is_err() {
+                                tracing::debug!("Disconnect receiver already dropped");
+                            }
+                            break;
+                        }
+                        Ok(_) => {}
+                    }
+                }
+            });
+            let mut disconnect_rx = disconnect_rx;
+            let mut client_disconnected = false;
+            loop {
+                tokio::select! {
+                    _ = &mut disconnect_rx, if !client_disconnected => {
+                        client_disconnected = true;
+                    }
+                    event = event_rx.recv() => {
+                        match event {
+                            Ok(ev) => {
+                                let mut json = serde_json::to_vec(&ev)?;
+                                json.push(b'\n');
+                                write_half.write_all(&json).await?;
+                            }
+                            Err(broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!(
+                                    count = n,
+                                    "Event subscriber lagged; {n} events dropped",
+                                );
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                break;
+                            }
+                        }
+                    }
+                }
+                if client_disconnected {
+                    break;
+                }
+            }
+            return Ok(());
+        }
+
         let request_id = cli_request.request_id.clone();
         let (response_tx, response_rx) = oneshot::channel::<CliOutcome>();
         let pending = PendingRequest {
@@ -486,6 +545,9 @@ async fn run() -> Result<(), Error> {
     // Channel from CLI connection tasks to the main loop.
     let (request_tx, mut request_rx) = mpsc::channel::<PendingRequest>(32);
 
+    // Broadcast channel for fanning out browser events to all event-stream subscribers.
+    let (event_tx, _initial_rx) = broadcast::channel::<BrowserEvent>(256);
+
     // Spawn the stdin reader task so that non-cancellation-safe reads do not block
     // the main select! loop.
     tokio::spawn(async move {
@@ -539,6 +601,9 @@ async fn run() -> Result<(), Error> {
                     "Received Response before Hello; ignoring",
                 );
             }
+            Some(Ok(Some(ExtensionMessage::Event { .. }))) => {
+                tracing::debug!("Received browser event before Hello; ignoring");
+            }
             Some(Ok(None)) | None => return Err(Error::NativeMessagingClosedBeforeHello),
             Some(Err(e)) => return Err(e),
         }
@@ -565,6 +630,11 @@ async fn run() -> Result<(), Error> {
                     }
                     Some(Ok(Some(ExtensionMessage::Hello(_)))) => {
                         tracing::warn!("Received unexpected Hello after initial handshake");
+                    }
+                    Some(Ok(Some(ExtensionMessage::Event { event }))) => {
+                        tracing::debug!("Broadcasting browser event");
+                        // .send() returns Err only if there are no receivers; that's fine.
+                        drop(event_tx.send(event));
                     }
                     Some(Ok(None)) | None => {
                         tracing::info!("Extension disconnected; shutting down");
@@ -616,8 +686,9 @@ async fn run() -> Result<(), Error> {
                     Ok((conn, _addr)) => {
                         tracing::debug!("Accepted new CLI client connection");
                         let request_tx_clone = request_tx.clone();
+                        let event_tx_clone = event_tx.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_cli_connection(conn, request_tx_clone).await {
+                            if let Err(e) = handle_cli_connection(conn, request_tx_clone, event_tx_clone).await {
                                 tracing::warn!(error = %e, "CLI connection error");
                             }
                         });

@@ -174,6 +174,13 @@ struct Cli {
 pub enum Command {
     /// List all running browser instances.
     Instances,
+    /// Stream browser events as newline-delimited JSON.
+    ///
+    /// Prints one JSON object per line for each browser event (window/tab open, close,
+    /// navigation, title change, active tab change) until interrupted.
+    ///
+    /// Multiple `event-stream` processes for the same browser instance are supported.
+    EventStream,
     /// Manage browser windows.
     Windows(WindowsArgs),
     /// Manage tabs within a browser window.
@@ -871,6 +878,50 @@ fn tabs_command_to_cli(cmd: TabsCommand) -> CliCommand {
     }
 }
 
+/// Connect to a mediator and stream browser events as newline-delimited JSON to stdout.
+///
+/// Sends `SubscribeEvents` and then reads `BrowserEvent` JSON lines from the socket,
+/// printing each to stdout. Runs until the connection closes or an error occurs.
+///
+/// # Errors
+///
+/// Returns an error if the connection or I/O fails.
+#[expect(
+    clippy::print_stdout,
+    reason = "event stream output goes to stdout by design"
+)]
+async fn stream_events(socket_path: &std::path::Path) -> Result<(), Error> {
+    let request = CliRequest {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        command: CliCommand::SubscribeEvents,
+    };
+
+    let stream = tokio::net::UnixStream::connect(socket_path).await?;
+    let (read_half, mut write_half) = stream.into_split();
+
+    let mut json = serde_json::to_vec(&request)?;
+    json.push(b'\n');
+    write_half.write_all(&json).await?;
+    // Keep write_half alive until the function returns so the mediator does not
+    // observe EOF on its read half and terminate the stream prematurely.
+    let _write_half = write_half;
+
+    let mut reader = tokio::io::BufReader::new(read_half);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).await?;
+        if n == 0 {
+            break; // Mediator closed the connection.
+        }
+        let trimmed = line.trim_end();
+        if !trimmed.is_empty() {
+            println!("{trimmed}");
+        }
+    }
+    Ok(())
+}
+
 /// Main application logic.
 ///
 /// # Errors
@@ -909,7 +960,7 @@ async fn do_stuff() -> Result<(), Error> {
             install_manifest(*browser, mediator_path.clone(), cli.output)?;
             return Ok(());
         }
-        Command::Windows(_) | Command::Tabs(_) => {}
+        Command::Windows(_) | Command::Tabs(_) | Command::EventStream => {}
     }
 
     // Commands that require a browser connection.
@@ -921,6 +972,11 @@ async fn do_stuff() -> Result<(), Error> {
         pid = instance.info.pid,
         "Selected browser instance",
     );
+
+    if matches!(cli.command, Command::EventStream) {
+        stream_events(&instance.socket_path).await?;
+        return Ok(());
+    }
 
     let cli_command = match cli.command {
         Command::Windows(w) => match w.command {
@@ -936,6 +992,7 @@ async fn do_stuff() -> Result<(), Error> {
         },
         Command::Tabs(t) => tabs_command_to_cli(t.command),
         Command::Instances
+        | Command::EventStream
         | Command::GenerateManpage { .. }
         | Command::GenerateShellCompletion { .. }
         | Command::InstallManifest { .. } => {

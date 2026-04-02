@@ -10,6 +10,7 @@
  *
  * Protocol (extension → mediator):
  *   On connect:  { "message_type": "Hello", "browser_name": "...", "browser_vendor": "...", "browser_version": "..." }
+ *   On event:    { "message_type": "Event", "event": { "type": "<EventVariant>", ... } }
  *   On response: { "message_type": "Response", "request_id": "<uuid>",
  *                  "outcome": { "status": "ok"|"err", "data": <CliResult>|<string> } }
  */
@@ -75,6 +76,77 @@ browser.webRequest.onErrorOccurred.addListener(
   },
   { urls: ["<all_urls>"] },
 );
+
+// ---------------------------------------------------------------------------
+// Browser event forwarding
+// ---------------------------------------------------------------------------
+
+/**
+ * Post a browser event message to the mediator if connected.
+ *
+ * @param {object} payload - Object with `type` and event-specific fields.
+ */
+function pushEvent(payload) {
+  if (nativePort) {
+    nativePort.postMessage({ message_type: "Event", event: payload });
+  }
+}
+
+browser.windows.onCreated.addListener((win) => {
+  pushEvent({ type: "WindowOpened", window_id: win.id, title: win.title ?? "" });
+});
+
+browser.windows.onRemoved.addListener((windowId) => {
+  pushEvent({ type: "WindowClosed", window_id: windowId });
+});
+
+browser.tabs.onActivated.addListener((activeInfo) => {
+  pushEvent({
+    type: "TabActivated",
+    window_id: activeInfo.windowId,
+    tab_id: activeInfo.tabId,
+    previous_tab_id: activeInfo.previousTabId ?? null,
+  });
+});
+
+browser.tabs.onCreated.addListener((tab) => {
+  pushEvent({
+    type: "TabOpened",
+    tab_id: tab.id,
+    window_id: tab.windowId,
+    index: tab.index,
+    url: tab.url ?? "",
+    title: tab.title ?? "",
+  });
+});
+
+browser.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  pushEvent({
+    type: "TabClosed",
+    tab_id: tabId,
+    window_id: removeInfo.windowId,
+    is_window_closing: removeInfo.isWindowClosing,
+  });
+});
+
+browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url !== undefined) {
+    pushEvent({
+      type: "TabNavigated",
+      tab_id: tabId,
+      window_id: tab.windowId,
+      url: changeInfo.url,
+    });
+  }
+  if (changeInfo.title !== undefined) {
+    pushEvent({
+      type: "TabTitleChanged",
+      tab_id: tabId,
+      window_id: tab.windowId,
+      title: changeInfo.title,
+    });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Native messaging connection

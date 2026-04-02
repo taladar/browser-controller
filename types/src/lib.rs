@@ -160,6 +160,74 @@ pub struct TabDetails {
     pub history_hidden_count: Option<u32>,
 }
 
+/// An event emitted by the browser extension and broadcast to all event-stream subscribers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum BrowserEvent {
+    /// A new browser window was opened.
+    WindowOpened {
+        /// The new window's ID.
+        window_id: u32,
+        /// The window's title at the time it was created (may be empty).
+        title: String,
+    },
+    /// A browser window was closed.
+    WindowClosed {
+        /// The ID of the closed window.
+        window_id: u32,
+    },
+    /// The active tab in a window changed.
+    TabActivated {
+        /// The window containing the newly active tab.
+        window_id: u32,
+        /// The ID of the newly active tab.
+        tab_id: u32,
+        /// The ID of the previously active tab, if any.
+        #[serde(default)]
+        previous_tab_id: Option<u32>,
+    },
+    /// A new tab was opened.
+    TabOpened {
+        /// The new tab's ID.
+        tab_id: u32,
+        /// The window containing the new tab.
+        window_id: u32,
+        /// Zero-based position of the tab within its window.
+        index: u32,
+        /// The URL loaded in the tab at creation time (may be empty or `"about:blank"`).
+        url: String,
+        /// The tab's title at creation time (often empty).
+        title: String,
+    },
+    /// A tab was closed.
+    TabClosed {
+        /// The ID of the closed tab.
+        tab_id: u32,
+        /// The window that contained the tab.
+        window_id: u32,
+        /// Whether the tab was closed because its parent window was also closing.
+        is_window_closing: bool,
+    },
+    /// A tab started loading a new URL.
+    TabNavigated {
+        /// The ID of the navigating tab.
+        tab_id: u32,
+        /// The window containing the tab.
+        window_id: u32,
+        /// The new URL.
+        url: String,
+    },
+    /// A tab's title changed.
+    TabTitleChanged {
+        /// The ID of the tab.
+        tab_id: u32,
+        /// The window containing the tab.
+        window_id: u32,
+        /// The new title.
+        title: String,
+    },
+}
+
 /// A command sent from the CLI to the mediator, and forwarded to the extension.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -247,6 +315,12 @@ pub enum CliCommand {
         /// Number of steps to go forward (default 1).
         steps: u32,
     },
+    /// Subscribe to a live stream of browser events.
+    ///
+    /// After sending this command the mediator streams [`BrowserEvent`] objects as
+    /// newline-delimited JSON on the same connection until the client disconnects.
+    /// No [`CliResponse`] is sent; events arrive directly as [`BrowserEvent`] JSON.
+    SubscribeEvents,
 }
 
 /// A request sent from the CLI to the mediator.
@@ -330,6 +404,11 @@ pub enum ExtensionMessage {
     Hello(ExtensionHello),
     /// A response to a previously forwarded [`CliRequest`].
     Response(CliResponse),
+    /// An unsolicited browser event pushed by the extension.
+    Event {
+        /// The browser event payload.
+        event: BrowserEvent,
+    },
 }
 
 impl std::fmt::Display for WindowState {
