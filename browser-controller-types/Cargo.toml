@@ -6,10 +6,10 @@ authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish = false
+publish.workspace = true
 repository.workspace = true
-keywords = ["automation", "browser"]
-categories = ["command-line-utilities"]
+keywords = ["browser", "automation", "native-messaging", "firefox", "chrome"]
+categories = ["data-structures"]
 
 [dependencies]
 serde = { workspace = true }

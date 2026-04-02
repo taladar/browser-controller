@@ -6,9 +6,9 @@ authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish = false
+publish.workspace = true
 repository.workspace = true
-keywords = ["automation", "browser"]
+keywords = ["browser", "automation", "native-messaging", "firefox", "chrome"]
 categories = ["command-line-utilities"]
 
 [package.metadata.deb]
