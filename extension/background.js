@@ -320,6 +320,8 @@ async function dispatch(commandType, params) {
       return cmdPinTab(params.tab_id);
     case "UnpinTab":
       return cmdUnpinTab(params.tab_id);
+    case "WarmupTab":
+      return cmdWarmupTab(params.tab_id);
     case "MoveTab":
       return cmdMoveTab(params.tab_id, params.new_index);
     default:
@@ -474,6 +476,12 @@ async function cmdPinTab(tabId) {
 async function cmdUnpinTab(tabId) {
   const tab = await browser.tabs.update(tabId, { pinned: false });
   return { type: "Tab", ...await serializeTabDetails(tab) };
+}
+
+/** Warms up a discarded tab, loading its content into memory without activating it. */
+async function cmdWarmupTab(tabId) {
+  await browser.tabs.warmup(tabId);
+  return { type: "Unit" };
 }
 
 /**

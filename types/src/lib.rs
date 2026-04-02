@@ -315,6 +315,11 @@ pub enum CliCommand {
         /// The ID of the tab to unpin.
         tab_id: u32,
     },
+    /// Warm up a discarded tab, loading its content into memory without activating it.
+    WarmupTab {
+        /// The ID of the tab to warm up.
+        tab_id: u32,
+    },
     /// Move a tab to a new position within its window.
     MoveTab {
         /// The ID of the tab to move.

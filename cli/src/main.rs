@@ -326,6 +326,12 @@ pub enum TabsCommand {
         #[clap(long)]
         tab_id: u32,
     },
+    /// Warm up a discarded tab, loading its content into memory without activating it.
+    Warmup {
+        /// Internal browser tab ID to warm up (shown in `tabs list`).
+        #[clap(long)]
+        tab_id: u32,
+    },
     /// Move a tab to a new position within its window.
     Move {
         /// Internal browser tab ID to move (shown in `tabs list`).
@@ -911,6 +917,7 @@ fn tabs_command_to_cli(cmd: TabsCommand) -> CliCommand {
         TabsCommand::Close { tab_id } => CliCommand::CloseTab { tab_id },
         TabsCommand::Pin { tab_id } => CliCommand::PinTab { tab_id },
         TabsCommand::Unpin { tab_id } => CliCommand::UnpinTab { tab_id },
+        TabsCommand::Warmup { tab_id } => CliCommand::WarmupTab { tab_id },
         TabsCommand::Move { tab_id, new_index } => CliCommand::MoveTab { tab_id, new_index },
         TabsCommand::Back { tab_id, steps } => CliCommand::GoBack { tab_id, steps },
         TabsCommand::Forward { tab_id, steps } => CliCommand::GoForward { tab_id, steps },
