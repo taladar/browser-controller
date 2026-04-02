@@ -101,5 +101,6 @@ include_paths = [
     "browser-controller-cli/**",
     "browser-controller-types/**",
     "Cargo.lock",
+    "Cargo.toml",
     "deny.toml",
 ]

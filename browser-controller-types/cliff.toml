@@ -100,5 +100,6 @@ recurse_submodules = false
 include_paths = [
     "browser-controller-types/**",
     "Cargo.lock",
+    "Cargo.toml",
     "deny.toml",
 ]
