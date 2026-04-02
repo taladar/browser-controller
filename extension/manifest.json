@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Browser Controller",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Native messaging bridge for browser-controller CLI",
   "background": {
     "service_worker": "background.js",

@@ -1,3 +1,9 @@
+browser-controller-mediator (0.1.3-1) unstable; urgency=medium
+
+  * Bug fixes Add version to browser-controller-types workspace dependency
+  * Miscellaneous tasks Add workspace Cargo.toml to cliff include_paths for all crates
+
+ -- Matthias Hörmann <mhoermann@gmail.com>  Thu, 02 Apr 2026 17:48:20 +0200
 browser-controller-mediator (0.1.2-1) unstable; urgency=medium
 
   * Miscellaneous tasks Enable publishing and improve keywords/categories for all crates

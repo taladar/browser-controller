@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.3 - 2026-04-02 15:48:19Z
+
+### 🐛 Bug Fixes
+
+- Add version to browser-controller-types workspace dependency
+
+### ⚙️ Miscellaneous Tasks
+
+- Add workspace Cargo.toml to cliff include_paths for all crates
+
 ## 0.1.2 - 2026-04-02 13:06:04Z
 
 ### ⚙️ Miscellaneous Tasks
