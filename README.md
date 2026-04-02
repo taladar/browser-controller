@@ -19,20 +19,82 @@ browser-controller-types:
 [![lib.rs Version browser-controller-types](https://img.shields.io/crates/v/browser-controller-types?label=lib.rs)](https://lib.rs/crates/browser-controller-types)
 [![docs.rs browser-controller-types](https://img.shields.io/docsrs/browser-controller-types)](https://docs.rs/browser-controller-types/latest/browser_controller_types)
 [![Dependency status browser-controller-types](https://deps.rs/crate/browser-controller-types/latest/status.svg)](https://deps.rs/crate/browser-controller-types/)
-Allows controlling the windows and tabs of a web browser via a CLI emitting JSON
 
-## Loading the extension
+Control the windows and tabs of a running web browser (Firefox, Chrome,
+Chromium, Brave, Edge, Librewolf, Waterfox) from the command line.
 
-### Firefox
+## How it works
+
+Three components work together:
+
+1. **browser-controller-mediator** — a native messaging host binary that the
+   browser launches when the extension connects. It listens on a local IPC
+   socket (Unix Domain Socket on Linux/macOS, Named Pipe on Windows).
+2. **browser extension** — loaded into the browser; opens the native messaging
+   connection to the mediator.
+3. **browser-controller CLI** — connects to the mediator's IPC socket and
+   sends commands or streams events.
+
+## Installation
+
+Install the CLI and mediator binaries:
+
+```sh
+cargo install browser-controller-cli
+cargo install browser-controller-mediator
+```
+
+Install the browser extension from your browser's add-on store (search for
+"browser-controller"). Then register the mediator with your browser:
+
+```sh
+# Firefox / Librewolf / Waterfox
+browser-controller install-manifest --browser firefox
+
+# Chrome / Chromium / Brave / Edge
+# (requires the 32-character extension ID shown on chrome://extensions)
+browser-controller install-manifest --browser chrome --extension-id <id>
+```
+
+Restart the browser after installing the manifest.
+
+## Usage
+
+```sh
+# List running browser instances
+browser-controller instances
+
+# List all open windows
+browser-controller windows list
+
+# Open a new tab in window 1 at a URL
+browser-controller tabs open 1 --url https://example.com
+
+# Stream browser events as newline-delimited JSON
+browser-controller event-stream
+
+# Machine-readable JSON output for any command
+browser-controller --output json windows list
+```
+
+See `browser-controller --help` or the
+[browser-controller-cli README](browser-controller-cli/README.md) for the
+full command reference.
+
+## Development
+
+### Loading the extension from source
+
+#### Firefox
 
 Load via `about:debugging` → This Firefox → Load Temporary Add-on, selecting
 `extension/manifest.json`.
 
-### Chrome / Chromium
+#### Chrome / Chromium
 
 Enable Developer mode in `chrome://extensions`, then click Load unpacked and
-select the `extension/` directory. Note the 32-character extension ID shown on
-the extensions page — you will need it when running `install-manifest`.
+select the `extension/` directory. Note the 32-character extension ID shown
+on the extensions page — you will need it when running `install-manifest`.
 
 ### Expected warning about unrecognized manifest key
 
@@ -47,6 +109,6 @@ or
 > manifest version.
 
 This is expected and harmless. The manifest intentionally declares both
-`background.service_worker` (used by Chrome) and `background.scripts` (used by
-Firefox). Each browser uses the key it supports and ignores the other. There is
-no cross-browser way to avoid the warning.
+`background.service_worker` (used by Chrome) and `background.scripts` (used
+by Firefox). Each browser uses the key it supports and ignores the other.
+There is no cross-browser way to avoid the warning.
