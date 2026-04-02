@@ -50,7 +50,13 @@ for p in "${workspace_crates[@]}"; do
   p_tag_basename="${p//-/_}"
   pushd "${p}" >/dev/null
   version="$(cargo get package.version)"
-  git cliff --prepend CHANGELOG.md -u -t "${p_tag_basename}_${version}"
+  git cliff --config cliff.toml -u -t "${p_tag_basename}_${version}" --context --output context.json
+  if [[ "$(cat context.json)" == "[]" ]]; then
+    sed -i "1s|^|## ${version} - $(date -u +%Y-%m-%dT%H:%M:%SZ)\n\nNo changes in this crate; see other browser-controller components.\n\n|" CHANGELOG.md
+  else
+    git cliff --prepend CHANGELOG.md -u -t "${p_tag_basename}_${version}"
+  fi
+  rm context.json
   rumdl fmt --fix CHANGELOG.md
   popd >/dev/null
 done
