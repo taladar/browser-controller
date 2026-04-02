@@ -12,7 +12,7 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: taiki-e/create-gh-release-action@v1
         with:
           prefix: 'browser_controller_'
@@ -52,7 +52,7 @@ jobs:
         run: |
           echo "PERL=$((where.exe perl)[0])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           echo "OPENSSL_SRC_PERL=$((where.exe perl)[0])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install cross-compilation tools
         uses: taiki-e/setup-cross-toolchain-action@v1
         with:
@@ -62,6 +62,8 @@ jobs:
         with:
           # Build and upload both the CLI and the native messaging host mediator.
           bin: browser-controller,browser-controller-mediator
+          # Required when multiple binaries are specified; $bin cannot be used.
+          archive: browser-controller-$target
           # (optional) Comma-separated list of additional files to be included in the archive.
           include: README.md,CHANGELOG.md
           # (optional) Whether to create the leading directory in the archive or not. default to false.
