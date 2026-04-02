@@ -1,5 +1,5 @@
 [workspace]
-members = ["cli", "mediator", "types"]
+members = ["browser-controller-cli", "browser-controller-mediator", "browser-controller-types"]
 resolver = "3"
 
 [workspace.package]
@@ -12,7 +12,7 @@ publish = true
 repository = "https://github.com/taladar/browser-controller"
 
 [workspace.dependencies]
-browser-controller-types = { path = "types" }
+browser-controller-types = { path = "browser-controller-types" }
 clap = { version = "4.6.0", features = ["derive", "cargo"] }
 clap_complete = "4.6.0"
 clap_mangen = "0.2.33"
