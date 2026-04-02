@@ -568,17 +568,27 @@ const SOCKET_EXT: &str = "pipe";
 ///
 /// Returns an error if the directory cannot be read.
 fn list_socket_files(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>, Error> {
+    tracing::debug!(dir = %dir.display(), "Scanning socket directory");
     let rd = match fs_err::read_dir(dir) {
         Ok(rd) => rd,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::debug!(dir = %dir.display(), "Socket directory does not exist");
+            return Ok(Vec::new());
+        }
         Err(e) => return Err(Error::Io(e)),
     };
     let mut paths = Vec::new();
     for entry in rd {
         let path = entry.map_err(Error::Io)?.path();
         if path.extension() == Some(std::ffi::OsStr::new(SOCKET_EXT)) {
+            tracing::debug!(socket = %path.display(), "Found socket file");
             paths.push(path);
+        } else {
+            tracing::debug!(path = %path.display(), "Ignoring non-socket file");
         }
+    }
+    if paths.is_empty() {
+        tracing::debug!(dir = %dir.display(), "No socket files found in directory");
     }
     Ok(paths)
 }
@@ -620,11 +630,13 @@ async fn query_instance(socket_path: &std::path::Path) -> Result<BrowserInfo, Er
 /// Returns an error if `XDG_RUNTIME_DIR` is not set or the directory cannot be read.
 async fn discover_instances() -> Result<Vec<DiscoveredInstance>, Error> {
     let dir = socket_dir()?;
+    tracing::debug!(dir = %dir.display(), "Discovering mediator instances");
     let sock_paths = tokio::task::spawn_blocking({
         let dir = dir.clone();
         move || list_socket_files(&dir)
     })
     .await??;
+    tracing::debug!(count = sock_paths.len(), "Socket files found");
 
     let mut instances = Vec::new();
     for socket_path in sock_paths {

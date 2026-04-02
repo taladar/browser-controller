@@ -686,9 +686,6 @@ async fn run() -> Result<(), Error> {
     #[cfg(unix)]
     {
         let listener = tokio::net::UnixListener::bind(&sock_path)?;
-        let _socket_guard = SocketGuard {
-            path: sock_path.clone(),
-        };
         tracing::info!(path = %sock_path.display(), "Listening on UDS socket");
         tokio::spawn(async move {
             loop {
@@ -708,9 +705,6 @@ async fn run() -> Result<(), Error> {
         let pipe_name = format!(r"\\.\pipe\browser-controller-{ppid_u32}");
         // Write an empty marker file for CLI discovery.
         fs_err::write(&sock_path, &[])?;
-        let _socket_guard = SocketGuard {
-            path: sock_path.clone(),
-        };
         tracing::info!(
             path = %sock_path.display(),
             pipe = %pipe_name,
@@ -748,6 +742,11 @@ async fn run() -> Result<(), Error> {
             }
         });
     }
+
+    // Keep the socket/marker file alive for the full duration of run().
+    let _socket_guard = SocketGuard {
+        path: sock_path.clone(),
+    };
 
     let mut stdin = tokio::io::stdin();
     let mut stdout = tokio::io::BufWriter::new(tokio::io::stdout());
