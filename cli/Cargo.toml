@@ -64,6 +64,9 @@ uuid = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 tracing-journald = { workspace = true }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.56"
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 

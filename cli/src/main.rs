@@ -32,9 +32,14 @@ pub enum Error {
     #[error("background task error: {0}")]
     JoinError(#[from] tokio::task::JoinError),
 
-    /// `XDG_RUNTIME_DIR` is not set.
-    #[error("XDG_RUNTIME_DIR is not set; cannot locate mediator sockets")]
+    /// The runtime/temp directory cannot be determined.
+    #[error("cannot determine runtime/temp directory for IPC sockets")]
     NoRuntimeDir,
+
+    /// Writing a Windows registry key for native messaging host registration failed.
+    #[cfg(target_os = "windows")]
+    #[error("failed to write Windows registry key: {0}")]
+    RegistryWriteFailed(#[source] std::io::Error),
 
     /// No running mediator instance was found.
     #[error("no browser-controller mediator is running (no sockets in {dir})")]
@@ -147,7 +152,9 @@ impl BrowserTarget {
     #[must_use]
     fn manifest_dir(self, base: &directories::BaseDirs) -> std::path::PathBuf {
         let home = base.home_dir();
-        match self {
+
+        #[cfg(target_os = "linux")]
+        return match self {
             Self::Firefox => home.join(".mozilla/native-messaging-hosts"),
             Self::Librewolf => home.join(".librewolf/native-messaging-hosts"),
             Self::Waterfox => home.join(".waterfox/native-messaging-hosts"),
@@ -155,6 +162,72 @@ impl BrowserTarget {
             Self::Chromium => home.join(".config/chromium/NativeMessagingHosts"),
             Self::Brave => home.join(".config/BraveSoftware/Brave-Browser/NativeMessagingHosts"),
             Self::Edge => home.join(".config/microsoft-edge/NativeMessagingHosts"),
+        };
+
+        #[cfg(target_os = "macos")]
+        return match self {
+            Self::Firefox => home.join("Library/Application Support/Mozilla/NativeMessagingHosts"),
+            Self::Librewolf => {
+                home.join("Library/Application Support/librewolf/NativeMessagingHosts")
+            }
+            Self::Waterfox => {
+                home.join("Library/Application Support/Waterfox/NativeMessagingHosts")
+            }
+            Self::Chrome => {
+                home.join("Library/Application Support/Google/Chrome/NativeMessagingHosts")
+            }
+            Self::Chromium => {
+                home.join("Library/Application Support/Chromium/NativeMessagingHosts")
+            }
+            Self::Brave => home.join(
+                "Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts",
+            ),
+            Self::Edge => {
+                home.join("Library/Application Support/Microsoft Edge/NativeMessagingHosts")
+            }
+        };
+
+        // Windows: JSON manifest file lives under APPDATA or LOCALAPPDATA.
+        // A registry key also points to it (written in install_manifest).
+        #[cfg(target_os = "windows")]
+        {
+            let appdata = std::env::var("APPDATA").unwrap_or_default();
+            let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
+            match self {
+                Self::Firefox | Self::Librewolf | Self::Waterfox => {
+                    std::path::Path::new(&appdata).join("Mozilla/NativeMessagingHosts")
+                }
+                Self::Chrome => {
+                    std::path::Path::new(&localappdata).join("Google/Chrome/NativeMessagingHosts")
+                }
+                Self::Chromium => {
+                    std::path::Path::new(&localappdata).join("Chromium/NativeMessagingHosts")
+                }
+                Self::Brave => std::path::Path::new(&localappdata)
+                    .join("BraveSoftware/Brave-Browser/NativeMessagingHosts"),
+                Self::Edge => {
+                    std::path::Path::new(&localappdata).join("Microsoft/Edge/NativeMessagingHosts")
+                }
+            }
+        }
+    }
+
+    /// Return the Windows registry subkey path for this browser's native messaging host.
+    ///
+    /// The key is written under `HKEY_CURRENT_USER` during `install-manifest`.
+    #[cfg(target_os = "windows")]
+    #[must_use]
+    const fn windows_registry_key(self) -> &'static str {
+        match self {
+            Self::Firefox | Self::Librewolf | Self::Waterfox => {
+                r"Software\Mozilla\NativeMessagingHosts\browser_controller"
+            }
+            Self::Chrome => r"Software\Google\Chrome\NativeMessagingHosts\browser_controller",
+            Self::Chromium => r"Software\Chromium\NativeMessagingHosts\browser_controller",
+            Self::Brave => {
+                r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\browser_controller"
+            }
+            Self::Edge => r"Software\Microsoft\Edge\NativeMessagingHosts\browser_controller",
         }
     }
 }
@@ -434,17 +507,52 @@ struct DiscoveredInstanceJson<'a> {
     profile_id: Option<&'a str>,
 }
 
-/// Return the directory where mediator sockets are stored.
+/// Return the directory where mediator IPC socket/marker files are stored.
+///
+/// - Linux: `$XDG_RUNTIME_DIR/browser-controller/`
+/// - macOS: `$TMPDIR/browser-controller/` (user-private; falls back to `~/Library/Caches`)
+/// - Windows: `%LOCALAPPDATA%\Temp\browser-controller\`
 ///
 /// # Errors
 ///
-/// Returns [`Error::NoRuntimeDir`] if `XDG_RUNTIME_DIR` is not set.
+/// Returns [`Error::NoRuntimeDir`] when the platform base directory cannot be determined.
 fn socket_dir() -> Result<std::path::PathBuf, Error> {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").map_err(|_not_set| Error::NoRuntimeDir)?;
-    Ok(std::path::Path::new(&runtime_dir).join("browser-controller"))
+    #[cfg(target_os = "linux")]
+    {
+        let runtime_dir =
+            std::env::var("XDG_RUNTIME_DIR").map_err(|_not_set| Error::NoRuntimeDir)?;
+        Ok(std::path::Path::new(&runtime_dir).join("browser-controller"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let dir = std::env::var("TMPDIR")
+            .map(|t| std::path::Path::new(&t).join("browser-controller"))
+            .or_else(|_| {
+                directories::BaseDirs::new()
+                    .map(|b| b.cache_dir().join("browser-controller"))
+                    .ok_or(Error::NoRuntimeDir)
+            })?;
+        Ok(dir)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let local = std::env::var("LOCALAPPDATA").map_err(|_| Error::NoRuntimeDir)?;
+        Ok(std::path::Path::new(&local)
+            .join("Temp")
+            .join("browser-controller"))
+    }
 }
 
-/// List all `*.sock` files in `dir`.
+/// File extension used for mediator IPC discovery files.
+///
+/// On Unix: `.sock` (the actual socket file).
+/// On Windows: `.pipe` (empty marker file; named pipe is discovered from the stem).
+#[cfg(unix)]
+const SOCKET_EXT: &str = "sock";
+#[cfg(windows)]
+const SOCKET_EXT: &str = "pipe";
+
+/// List all mediator IPC discovery files in `dir`.
 ///
 /// # Errors
 ///
@@ -458,7 +566,7 @@ fn list_socket_files(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>, E
     let mut paths = Vec::new();
     for entry in rd {
         let path = entry.map_err(Error::Io)?.path();
-        if path.extension() == Some(std::ffi::OsStr::new("sock")) {
+        if path.extension() == Some(std::ffi::OsStr::new(SOCKET_EXT)) {
             paths.push(path);
         }
     }
@@ -586,6 +694,18 @@ fn select_instance<'a>(
     }
 }
 
+/// Derive the Windows named pipe name from a `.pipe` marker file path.
+///
+/// The stem of the file (the PID) is used to construct `\\.\pipe\browser-controller-<pid>`.
+#[cfg(windows)]
+fn pipe_name_from_marker(path: &std::path::Path) -> Result<String, Error> {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| Error::Io(std::io::Error::other("invalid pipe marker path")))?;
+    Ok(format!(r"\\.\pipe\browser-controller-{stem}"))
+}
+
 /// Send a command to a mediator and return the result.
 ///
 /// # Errors
@@ -602,8 +722,15 @@ async fn send_command(
         command,
     };
 
+    #[cfg(unix)]
     let stream = tokio::net::UnixStream::connect(socket_path).await?;
-    let (read_half, mut write_half) = stream.into_split();
+    #[cfg(windows)]
+    let stream = {
+        let pipe_name = pipe_name_from_marker(socket_path)?;
+        tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name)?
+    };
+
+    let (read_half, mut write_half) = tokio::io::split(stream);
 
     let mut json = serde_json::to_vec(&request)?;
     json.push(b'\n');
@@ -945,9 +1072,25 @@ fn install_manifest(
 
     fs_err::write(&manifest_path, json.as_bytes()).map_err(Error::Io)?;
 
+    // On Windows, browsers find native messaging hosts exclusively via the registry.
+    // Write the registry key pointing to the manifest file.
+    #[cfg(target_os = "windows")]
+    {
+        use winreg::RegKey;
+        use winreg::enums::HKEY_CURRENT_USER;
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _) = hkcu
+            .create_subkey(browser.windows_registry_key())
+            .map_err(Error::RegistryWriteFailed)?;
+        key.set_value("", &manifest_path.to_string_lossy().as_ref())
+            .map_err(Error::RegistryWriteFailed)?;
+    }
+
     match format {
         OutputFormat::Human => {
             println!("Installed manifest to {}", manifest_path.display());
+            #[cfg(target_os = "windows")]
+            println!("Registered in HKCU\\{}", browser.windows_registry_key());
         }
         OutputFormat::Json => {
             let result = InstallManifestResult {
@@ -1021,8 +1164,15 @@ async fn stream_events(socket_path: &std::path::Path) -> Result<(), Error> {
         command: CliCommand::SubscribeEvents,
     };
 
+    #[cfg(unix)]
     let stream = tokio::net::UnixStream::connect(socket_path).await?;
-    let (read_half, mut write_half) = stream.into_split();
+    #[cfg(windows)]
+    let stream = {
+        let pipe_name = pipe_name_from_marker(socket_path)?;
+        tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name)?
+    };
+
+    let (read_half, mut write_half) = tokio::io::split(stream);
 
     let mut json = serde_json::to_vec(&request)?;
     json.push(b'\n');

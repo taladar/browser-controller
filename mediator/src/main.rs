@@ -1,11 +1,12 @@
-//! Browser Controller Mediator — native messaging host that bridges the Firefox extension
-//! to CLI clients via a Unix Domain Socket.
+//! Browser Controller Mediator — native messaging host that bridges the browser extension
+//! to CLI clients via a platform-specific IPC channel (Unix Domain Socket on Unix,
+//! Named Pipe on Windows).
 //!
-//! Firefox launches this binary as a native messaging host when the extension calls
+//! The browser launches this binary as a native messaging host when the extension calls
 //! `browser.runtime.connectNative("browser_controller")`. The mediator then:
 //!
 //! 1. Reads the browser's identity from an initial `Hello` message.
-//! 2. Creates a Unix Domain Socket in `$XDG_RUNTIME_DIR/browser-controller/<ppid>.sock`.
+//! 2. Creates an IPC endpoint in the platform runtime/temp directory.
 //! 3. Accepts CLI client connections and bridges their requests to the extension.
 
 use std::collections::HashMap;
@@ -34,19 +35,13 @@ pub enum Error {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    /// `XDG_RUNTIME_DIR` is not set and no usable fallback is available.
-    #[error("XDG_RUNTIME_DIR is not set; cannot determine socket directory")]
+    /// The runtime/temp directory cannot be determined.
+    #[error("cannot determine runtime/temp directory for IPC socket")]
     NoRuntimeDir,
 
-    /// The parent process ID could not be converted to `u32`.
-    #[error("parent process ID {pid} is not a valid u32: {source}")]
-    InvalidPpid {
-        /// The raw (signed) PID value.
-        pid: i32,
-        /// The underlying conversion error.
-        #[source]
-        source: std::num::TryFromIntError,
-    },
+    /// The parent process ID could not be determined.
+    #[error("cannot determine parent process ID: {0}")]
+    NoPpid(String),
 
     /// The native messaging connection was closed without a preceding `Hello` message.
     #[error("native messaging connection closed before receiving Hello from extension")]
@@ -74,9 +69,9 @@ struct PendingRequest {
     response_tx: oneshot::Sender<CliOutcome>,
 }
 
-/// RAII guard that removes the UDS socket file on drop.
+/// RAII guard that removes the IPC socket/marker file on drop.
 struct SocketGuard {
-    /// Path to the socket file to clean up.
+    /// Path to the file to clean up.
     path: std::path::PathBuf,
 }
 
@@ -96,6 +91,17 @@ impl Drop for SocketGuard {
         }
     }
 }
+
+/// A type-erased bidirectional async stream suitable for use in the accept loop.
+trait BiDiStream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static {}
+
+#[cfg(unix)]
+impl BiDiStream for tokio::net::UnixStream {}
+
+#[cfg(windows)]
+impl BiDiStream for tokio::net::windows::named_pipe::NamedPipeServer {}
+
+impl BiDiStream for Box<dyn BiDiStream> {}
 
 /// Read one length-prefixed JSON message from a native messaging stdin stream.
 ///
@@ -159,8 +165,8 @@ async fn write_native_message(
 /// # Errors
 ///
 /// Returns an error if reading fails or the JSON cannot be deserialized.
-async fn read_cli_request(
-    reader: &mut tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
+async fn read_cli_request<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
 ) -> Result<Option<CliRequest>, Error> {
     let mut line = String::new();
     let n = reader.read_line(&mut line).await?;
@@ -176,8 +182,8 @@ async fn read_cli_request(
 /// # Errors
 ///
 /// Returns an error if JSON serialization or writing fails.
-async fn write_cli_response(
-    writer: &mut tokio::net::unix::OwnedWriteHalf,
+async fn write_cli_response<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
     response: &CliResponse,
 ) -> Result<(), Error> {
     let mut json = serde_json::to_vec(response)?;
@@ -194,12 +200,15 @@ async fn write_cli_response(
 /// # Errors
 ///
 /// Returns an error if communication with the client fails.
-async fn handle_cli_connection(
-    conn: tokio::net::UnixStream,
+async fn handle_cli_connection<S>(
+    conn: S,
     request_tx: mpsc::Sender<PendingRequest>,
     event_tx: broadcast::Sender<BrowserEvent>,
-) -> Result<(), Error> {
-    let (read_half, mut write_half) = conn.into_split();
+) -> Result<(), Error>
+where
+    S: BiDiStream,
+{
+    let (read_half, mut write_half) = tokio::io::split(conn);
     let mut reader = tokio::io::BufReader::new(read_half);
     loop {
         let Some(cli_request) = read_cli_request(&mut reader).await? else {
@@ -297,7 +306,6 @@ async fn handle_cli_connection(
 /// Return the final path component of a UTF-8 path string as an owned `String`.
 ///
 /// Returns `None` if the path has no file name component or it is not valid UTF-8.
-#[cfg(target_os = "linux")]
 #[must_use]
 fn path_basename(path: &str) -> Option<String> {
     std::path::Path::new(path)
@@ -308,27 +316,32 @@ fn path_basename(path: &str) -> Option<String> {
 
 /// Locate and read the Firefox `profiles.ini` file.
 ///
-/// Tries, in order:
-/// - `~/.mozilla/firefox/profiles.ini` (standard installation)
-/// - `~/snap/firefox/common/.mozilla/firefox/profiles.ini` (Snap package)
-/// - `~/.var/app/org.mozilla.firefox/.mozilla/firefox/profiles.ini` (Flatpak)
-///
-/// Falls back to the `$HOME` environment variable if the `directories` crate cannot
-/// determine the home directory.  Returns `None` if no readable file is found.
-#[cfg(target_os = "linux")]
+/// Tries platform-specific candidate paths in order, returning the content of the
+/// first readable file. Returns `None` if no readable file is found.
 #[must_use]
 fn read_firefox_profiles_ini() -> Option<String> {
     let home = directories::BaseDirs::new()
         .map(|b| b.home_dir().to_path_buf())
         .or_else(|| std::env::var("HOME").ok().map(std::path::PathBuf::from))?;
 
-    let candidates = [
+    #[cfg(target_os = "linux")]
+    let candidates: &[std::path::PathBuf] = &[
         home.join(".mozilla/firefox/profiles.ini"),
         home.join("snap/firefox/common/.mozilla/firefox/profiles.ini"),
         home.join(".var/app/org.mozilla.firefox/.mozilla/firefox/profiles.ini"),
     ];
 
-    for candidate in &candidates {
+    #[cfg(target_os = "macos")]
+    let candidates: &[std::path::PathBuf] =
+        &[home.join("Library/Application Support/Firefox/profiles.ini")];
+
+    #[cfg(target_os = "windows")]
+    let candidates: &[std::path::PathBuf] = {
+        let appdata = std::env::var("APPDATA").unwrap_or_default();
+        &[std::path::Path::new(&appdata).join("Mozilla/Firefox/profiles.ini")]
+    };
+
+    for candidate in candidates {
         match fs_err::read_to_string(candidate) {
             Ok(content) => {
                 tracing::info!(path = %candidate.display(), "Found Firefox profiles.ini");
@@ -352,7 +365,6 @@ fn read_firefox_profiles_ini() -> Option<String> {
 ///
 /// Scans `[Profile*]` sections for one with `Name=<name>` and returns the basename of
 /// its `Path` value.  Returns `None` if the named profile is not found.
-#[cfg(target_os = "linux")]
 #[must_use]
 fn firefox_profile_id_from_name(ini_content: &str, name: &str) -> Option<String> {
     let mut in_profile_section = false;
@@ -389,7 +401,6 @@ fn firefox_profile_id_from_name(ini_content: &str, name: &str) -> Option<String>
 /// Checks `[Install*]` sections for a `Default=<path>` key first (present in Firefox 67+,
 /// reflects the most-recently-used default).  Falls back to a `[Profile*]` section marked
 /// with `Default=1`.  Returns the directory basename of the located profile path.
-#[cfg(target_os = "linux")]
 #[must_use]
 fn firefox_default_profile_id(ini_content: &str) -> Option<String> {
     // [Install<hash>] → Default=Profiles/abc123.default-release (most authoritative).
@@ -445,7 +456,6 @@ fn firefox_default_profile_id(ini_content: &str) -> Option<String> {
 }
 
 /// Which browser family the parent process belongs to.
-#[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BrowserKind {
     /// Firefox or a Firefox-compatible fork (LibreWolf, Waterfox, …).
@@ -460,7 +470,6 @@ enum BrowserKind {
 ///
 /// Inspects `argv[0]` (the executable name / path) for well-known substrings that
 /// identify Firefox-family or Chrome-family browsers.
-#[cfg(target_os = "linux")]
 fn detect_browser_from_cmdline(args: &[&str]) -> BrowserKind {
     let exe = args.first().copied().unwrap_or("").to_ascii_lowercase();
     let exe_name = std::path::Path::new(&exe)
@@ -491,7 +500,6 @@ fn detect_browser_from_cmdline(args: &[&str]) -> BrowserKind {
 /// 1. `--profile-directory=<name>` present → return that value.
 /// 2. `--user-data-dir=<path>` present → return the basename of the path.
 /// 3. Neither flag present → return `Some("Default".to_owned())`.
-#[cfg(target_os = "linux")]
 fn chrome_profile_id_from_args(args: &[&str]) -> Option<String> {
     let mut profile_dir: Option<&str> = None;
     let mut user_data_dir: Option<&str> = None;
@@ -522,38 +530,34 @@ fn chrome_profile_id_from_args(args: &[&str]) -> Option<String> {
     Some("Default".to_owned())
 }
 
+/// Return the parent process ID of this process.
+///
+/// # Errors
+///
+/// Returns an error if the parent PID cannot be determined.
+fn parent_pid() -> Result<u32, Error> {
+    let sys = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing().with_processes(sysinfo::ProcessRefreshKind::nothing()),
+    );
+    let our_pid = sysinfo::get_current_pid()
+        .map_err(|e| Error::NoPpid(format!("cannot determine own PID: {e}")))?;
+    sys.process(our_pid)
+        .and_then(sysinfo::Process::parent)
+        .map(|p| p.as_u32())
+        .ok_or_else(|| Error::NoPpid("parent process not found in process list".into()))
+}
+
 /// Determine the browser profile ID for the process with the given PID.
 ///
-/// First detects the browser family from `argv[0]`, then applies the appropriate
-/// profile-resolution strategy:
-///
-/// **Firefox/LibreWolf/Waterfox** (resolution order):
-/// 1. `--profile <path>` in the command line → basename of the path.
-/// 2. `-P <name>` in the command line → look up the named profile in `profiles.ini`.
-/// 3. No explicit flag → read the default profile from `profiles.ini`
-///    (`[Install*]` → `Default=`, or `[Profile*]` with `Default=1`).
-///
-/// **Chrome/Chromium/Brave/Edge** (resolution order):
-/// 1. `--profile-directory=<name>` present → return that value.
-/// 2. `--user-data-dir=<path>` present → return the basename of the path.
-/// 3. Neither flag present → return `Some("Default".to_owned())`.
+/// Uses sysinfo for cross-platform process command-line access.
 ///
 /// Returns `None` if the command line cannot be read or no profile can be determined.
-#[cfg(target_os = "linux")]
 fn read_parent_profile_id(ppid: u32) -> Option<String> {
-    let cmdline = match fs_err::read(format!("/proc/{ppid}/cmdline")) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::info!(ppid, error = %e, "Cannot read parent process cmdline; profile ID unavailable");
-            return None;
-        }
-    };
-    // NUL-separated, NUL-terminated; skip empty trailing entries.
-    let args: Vec<&str> = cmdline
-        .split(|&b| b == 0)
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| std::str::from_utf8(s).ok())
-        .collect();
+    let sys = sysinfo::System::new_with_specifics(sysinfo::RefreshKind::nothing().with_processes(
+        sysinfo::ProcessRefreshKind::nothing().with_cmd(sysinfo::UpdateKind::Always),
+    ));
+    let process = sys.process(sysinfo::Pid::from_u32(ppid))?;
+    let args: Vec<&str> = process.cmd().iter().filter_map(|s| s.to_str()).collect();
 
     tracing::debug!(args = ?args, "Parent process command line");
 
@@ -594,23 +598,61 @@ fn read_parent_profile_id(ppid: u32) -> Option<String> {
     }
 }
 
-/// Returns `None` on non-Linux platforms where `/proc` is unavailable.
-#[cfg(not(target_os = "linux"))]
-fn read_parent_profile_id(_ppid: u32) -> Option<String> {
-    None
-}
-
-/// Determine the UDS socket path from the parent PID and `XDG_RUNTIME_DIR`.
+/// Return the directory in which IPC socket/marker files are stored.
+///
+/// - Linux: `$XDG_RUNTIME_DIR/browser-controller/`
+/// - macOS: `$TMPDIR/browser-controller/` (user-private, set by launchd; falls back to
+///   `~/Library/Caches/browser-controller/` if `$TMPDIR` is unset)
+/// - Windows: `%LOCALAPPDATA%\Temp\browser-controller\`
 ///
 /// # Errors
 ///
-/// Returns an error if `XDG_RUNTIME_DIR` is not set, the parent PID is invalid, or the
-/// socket directory cannot be created.
-fn socket_path(ppid_u32: u32) -> Result<std::path::PathBuf, Error> {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").map_err(|_not_set| Error::NoRuntimeDir)?;
-    let socket_dir = std::path::Path::new(&runtime_dir).join("browser-controller");
-    fs_err::create_dir_all(&socket_dir)?;
-    Ok(socket_dir.join(format!("{ppid_u32}.sock")))
+/// Returns [`Error::NoRuntimeDir`] when the platform base directory cannot be determined.
+fn socket_dir() -> Result<std::path::PathBuf, Error> {
+    #[cfg(target_os = "linux")]
+    {
+        let runtime = std::env::var("XDG_RUNTIME_DIR").map_err(|_not_set| Error::NoRuntimeDir)?;
+        Ok(std::path::Path::new(&runtime).join("browser-controller"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // $TMPDIR on macOS is set by launchd to a user-private path like
+        // /var/folders/<xx>/<yy>/T/ (mode 0700). Do NOT fall back to /tmp
+        // which is world-writable. Use ~/Library/Caches as a last resort.
+        let dir = std::env::var("TMPDIR")
+            .map(|t| std::path::Path::new(&t).join("browser-controller"))
+            .or_else(|_| {
+                directories::BaseDirs::new()
+                    .map(|b| b.cache_dir().join("browser-controller"))
+                    .ok_or(Error::NoRuntimeDir)
+            })?;
+        Ok(dir)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let local = std::env::var("LOCALAPPDATA").map_err(|_| Error::NoRuntimeDir)?;
+        Ok(std::path::Path::new(&local)
+            .join("Temp")
+            .join("browser-controller"))
+    }
+}
+
+/// Determine the IPC path for the given parent PID.
+///
+/// On Unix this is an actual socket file (`<ppid>.sock`).
+/// On Windows this is an empty marker file (`<ppid>.pipe`) used for discovery;
+/// the named pipe itself is `\\.\pipe\browser-controller-<ppid>`.
+///
+/// # Errors
+///
+/// Returns an error if the socket directory cannot be determined or created.
+fn ipc_path(ppid_u32: u32) -> Result<std::path::PathBuf, Error> {
+    let dir = socket_dir()?;
+    fs_err::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    return Ok(dir.join(format!("{ppid_u32}.sock")));
+    #[cfg(windows)]
+    return Ok(dir.join(format!("{ppid_u32}.pipe")));
 }
 
 /// Core mediator logic: run the main event loop.
@@ -619,28 +661,88 @@ fn socket_path(ppid_u32: u32) -> Result<std::path::PathBuf, Error> {
 ///
 /// Returns an error if the event loop encounters an unrecoverable failure.
 async fn run() -> Result<(), Error> {
-    let ppid_raw = nix::unistd::getppid().as_raw();
-    let ppid_u32 = u32::try_from(ppid_raw).map_err(|source| Error::InvalidPpid {
-        pid: ppid_raw,
-        source,
-    })?;
+    let ppid_u32 = parent_pid()?;
 
     tracing::info!(ppid = ppid_u32, "Mediator started");
 
-    let sock_path = socket_path(ppid_u32)?;
+    let sock_path = ipc_path(ppid_u32)?;
 
-    // Remove a stale socket from a previous run if present.
+    // Channel carrying accepted connections (type-erased) to the main select! loop.
+    let (conn_tx, mut conn_rx) = mpsc::channel::<Result<Box<dyn BiDiStream>, std::io::Error>>(32);
+
+    // Remove a stale socket/marker from a previous run if present.
     match fs_err::remove_file(&sock_path) {
         Ok(()) => tracing::debug!(path = %sock_path.display(), "Removed stale socket file"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(Error::Io(e)),
     }
 
-    let listener = tokio::net::UnixListener::bind(&sock_path)?;
-    let _socket_guard = SocketGuard {
-        path: sock_path.clone(),
-    };
-    tracing::info!(path = %sock_path.display(), "Listening on UDS socket");
+    // Platform-specific listener setup.
+    #[cfg(unix)]
+    {
+        let listener = tokio::net::UnixListener::bind(&sock_path)?;
+        let _socket_guard = SocketGuard {
+            path: sock_path.clone(),
+        };
+        tracing::info!(path = %sock_path.display(), "Listening on UDS socket");
+        tokio::spawn(async move {
+            loop {
+                let result = listener
+                    .accept()
+                    .await
+                    .map(|(conn, _addr)| -> Box<dyn BiDiStream> { Box::new(conn) });
+                if conn_tx.send(result).await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    #[cfg(windows)]
+    {
+        let pipe_name = format!(r"\\.\pipe\browser-controller-{ppid_u32}");
+        // Write an empty marker file for CLI discovery.
+        fs_err::write(&sock_path, &[])?;
+        let _socket_guard = SocketGuard {
+            path: sock_path.clone(),
+        };
+        tracing::info!(
+            path = %sock_path.display(),
+            pipe = %pipe_name,
+            "Listening on named pipe",
+        );
+        let pipe_name_owned = pipe_name.clone();
+        tokio::spawn(async move {
+            use tokio::net::windows::named_pipe::ServerOptions;
+            loop {
+                let server = match ServerOptions::new()
+                    .first_pipe_instance(false)
+                    .create(&pipe_name_owned)
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        if conn_tx.send(Err(e)).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                };
+                match server.connect().await {
+                    Ok(()) => {
+                        let boxed: Box<dyn BiDiStream> = Box::new(server);
+                        if conn_tx.send(Ok(boxed)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        if conn_tx.send(Err(e)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     let mut stdin = tokio::io::stdin();
     let mut stdout = tokio::io::BufWriter::new(tokio::io::stdout());
@@ -787,9 +889,9 @@ async fn run() -> Result<(), Error> {
             }
 
             // New CLI client connection.
-            accept_result = listener.accept() => {
+            Some(accept_result) = conn_rx.recv() => {
                 match accept_result {
-                    Ok((conn, _addr)) => {
+                    Ok(conn) => {
                         tracing::debug!("Accepted new CLI client connection");
                         let request_tx_clone = request_tx.clone();
                         let event_tx_clone = event_tx.clone();
@@ -860,7 +962,6 @@ async fn main() {
     let registry = registry.with(file_layer);
 
     // Set up journald logging on Linux.
-    // Uses `.ok().map()` so both the Some and None arms have the same Option<Filtered<…>> type.
     #[cfg(target_os = "linux")]
     let registry = {
         let journald_filter = match EnvFilter::builder()
