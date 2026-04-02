@@ -1,5 +1,10 @@
 # browser-controller-cli
 
+[![Crates.io Version browser-controller-cli](https://img.shields.io/crates/v/browser-controller-cli)](https://crates.io/crates/browser-controller-cli)
+[![lib.rs Version browser-controller-cli](https://img.shields.io/crates/v/browser-controller-cli?label=lib.rs)](https://lib.rs/crates/browser-controller-cli)
+![docs.rs browser-controller-cli - none for binary crate](https://img.shields.io/badge/docs-none_for_binary_crate-lightgrey)
+[![Dependency status browser-controller-cli](https://deps.rs/crate/browser-controller-cli/latest/status.svg)](https://deps.rs/crate/browser-controller-cli/)
+
 Command-line tool to control the windows and tabs of a running web browser
 (Firefox, Chrome, Chromium, Brave, Edge, Librewolf, Waterfox) via a native
 messaging host.

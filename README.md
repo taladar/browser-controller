@@ -1,11 +1,24 @@
 # browser-controller
 
 [![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/taladar/browser-controller/github-release.yaml)](https://github.com/taladar/browser-controller/actions/workflows/github-release.yaml)
-browser-controller:
-[![Crates.io Version browser-controller](https://img.shields.io/crates/v/browser-controller)](https://crates.io/crates/browser-controller)
-[![lib.rs Version browser-controller](https://img.shields.io/crates/v/browser-controller?label=lib.rs)](https://lib.rs/crates/browser-controller)
-![docs.rs browser-controller - none for binary crate](https://img.shields.io/badge/docs-none_for_binary_crate-lightgrey)
-[![Dependency status browser-controller](https://deps.rs/crate/browser-controller/latest/status.svg)](https://deps.rs/crate/browser-controller/)
+
+browser-controller-cli:
+[![Crates.io Version browser-controller-cli](https://img.shields.io/crates/v/browser-controller-cli)](https://crates.io/crates/browser-controller-cli)
+[![lib.rs Version browser-controller-cli](https://img.shields.io/crates/v/browser-controller-cli?label=lib.rs)](https://lib.rs/crates/browser-controller-cli)
+![docs.rs browser-controller-cli - none for binary crate](https://img.shields.io/badge/docs-none_for_binary_crate-lightgrey)
+[![Dependency status browser-controller-cli](https://deps.rs/crate/browser-controller-cli/latest/status.svg)](https://deps.rs/crate/browser-controller-cli/)
+
+browser-controller-mediator:
+[![Crates.io Version browser-controller-mediator](https://img.shields.io/crates/v/browser-controller-mediator)](https://crates.io/crates/browser-controller-mediator)
+[![lib.rs Version browser-controller-mediator](https://img.shields.io/crates/v/browser-controller-mediator?label=lib.rs)](https://lib.rs/crates/browser-controller-mediator)
+![docs.rs browser-controller-mediator - none for binary crate](https://img.shields.io/badge/docs-none_for_binary_crate-lightgrey)
+[![Dependency status browser-controller-mediator](https://deps.rs/crate/browser-controller-mediator/latest/status.svg)](https://deps.rs/crate/browser-controller-mediator/)
+
+browser-controller-types:
+[![Crates.io Version browser-controller-types](https://img.shields.io/crates/v/browser-controller-types)](https://crates.io/crates/browser-controller-types)
+[![lib.rs Version browser-controller-types](https://img.shields.io/crates/v/browser-controller-types?label=lib.rs)](https://lib.rs/crates/browser-controller-types)
+[![docs.rs browser-controller-types](https://img.shields.io/docsrs/browser-controller-types)](https://docs.rs/browser-controller-types/latest/browser_controller_types)
+[![Dependency status browser-controller-types](https://deps.rs/crate/browser-controller-types/latest/status.svg)](https://deps.rs/crate/browser-controller-types/)
 Allows controlling the windows and tabs of a web browser via a CLI emitting JSON
 
 ## Loading the extension

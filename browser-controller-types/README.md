@@ -1,5 +1,10 @@
 # browser-controller-types
 
+[![Crates.io Version browser-controller-types](https://img.shields.io/crates/v/browser-controller-types)](https://crates.io/crates/browser-controller-types)
+[![lib.rs Version browser-controller-types](https://img.shields.io/crates/v/browser-controller-types?label=lib.rs)](https://lib.rs/crates/browser-controller-types)
+[![docs.rs browser-controller-types](https://img.shields.io/docsrs/browser-controller-types)](https://docs.rs/browser-controller-types/latest/browser_controller_types)
+[![Dependency status browser-controller-types](https://deps.rs/crate/browser-controller-types/latest/status.svg)](https://deps.rs/crate/browser-controller-types/)
+
 Shared protocol types for the browser-controller project. Defines the
 serializable request and response types exchanged between the
 [browser-controller CLI](https://crates.io/crates/browser-controller-cli) and
