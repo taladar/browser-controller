@@ -1,3 +1,11 @@
+browser-controller-mediator (0.1.2-1) unstable; urgency=medium
+
+  * Miscellaneous tasks Enable publishing and improve keywords/categories for all crates
+  * Miscellaneous tasks Fix exclude lists for crates.io publishing
+  * Miscellaneous tasks - types - Sort Cargo.toml fields via cargo-sort
+  * Miscellaneous tasks Add LICENSE files, per-crate READMEs, fix mediator description
+
+ -- Matthias Hörmann <mhoermann@gmail.com>  Thu, 02 Apr 2026 15:06:05 +0200
 browser-controller-mediator (0.1.1-1) unstable; urgency=medium
 
   * Features Implement browser-controller workspace with mediator, CLI, and extension
