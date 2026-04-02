@@ -19,7 +19,7 @@ exclude = [
 ]
 
 [package.metadata.deb]
-name = "browser-controller"
+name = "browser-controller-cli"
 depends = "$auto"
 extended-description = "CLI to control Firefox windows and tabs via the browser-controller mediator"
 section = "utils"
