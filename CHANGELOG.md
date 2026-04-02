@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.5 - 2026-04-02 16:47:30Z
+
+### 🚀 Features
+
+- *(extension)* Declare no data collection per Firefox built-in consent
+
+### 🐛 Bug Fixes
+
+- *(release)* Add missing commits field to context.json before git-cliff reads
+  it
+- *(release)* Manually generate empty Debian changelog section when no commits
+- *(release)* Manually generate empty CHANGELOG.md section when no commits
+- *(release)* Correctly rewrite CHANGELOG.md header when inserting empty section
+
 ## 0.1.4 - 2026-04-02 16:09:03Z
 
 ### 📚 Documentation

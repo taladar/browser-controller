@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5 - 2026-04-02T16:47:30Z
+
+No changes in this crate; see other browser-controller components.
+
 ## 0.1.4 - 2026-04-02 16:09:02Z
 
 ### 📚 Documentation

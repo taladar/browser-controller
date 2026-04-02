@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Browser Controller",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Native messaging bridge for browser-controller CLI",
   "background": {
     "service_worker": "background.js",
@@ -24,7 +24,9 @@
       "id": "browser-controller@taladar.net",
       "strict_min_version": "109.0",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "none"
+        ]
       }
     }
   }

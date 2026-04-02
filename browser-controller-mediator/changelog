@@ -1,3 +1,9 @@
+browser-controller-mediator (0.1.5-1) unstable; urgency=medium
+
+  * No changes in this package; see other browser-controller components.
+
+ -- Matthias Hörmann <mhoermann@gmail.com>  Thu, 02 Apr 2026 18:47:30 +0200
+
 browser-controller-mediator (0.1.4-1) unstable; urgency=medium
 
   * Documentation Add correct per-crate badges to workspace and crate READMEs
