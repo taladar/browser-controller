@@ -1,6 +1,6 @@
 [package]
 name = "browser-controller-mediator"
-description = "Native messaging host that bridges the browser-controller Firefox extension to the CLI via Unix Domain Socket"
+description = "Native messaging host that bridges the browser-controller browser extension to the CLI via a platform-specific IPC channel"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -8,6 +8,7 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 repository.workspace = true
+readme = "README.md"
 keywords = ["browser", "automation", "native-messaging", "firefox", "chrome"]
 categories = ["command-line-utilities"]
 exclude = [

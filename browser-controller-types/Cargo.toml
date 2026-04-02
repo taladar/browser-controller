@@ -8,6 +8,7 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 repository.workspace = true
+readme = "README.md"
 keywords = ["browser", "automation", "native-messaging", "firefox", "chrome"]
 categories = ["data-structures"]
 exclude = [".env", "cliff.toml", "tarpaulin-report.html", "tarpaulin-report.json"]
