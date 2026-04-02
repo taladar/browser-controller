@@ -707,16 +707,31 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
             }
         }
         CliResult::Tab(tab) => {
-            println!("Tab {} (ID {}): {}", tab.index, tab.id, tab.title);
-            println!("URL: {}", tab.url);
+            let active = if tab.is_active { "[active]" } else { "       " };
+            println!("Tab {:<4} {} {}", tab.index, active, tab.status);
+            println!("  ID:     {}", tab.id);
+            println!("  Title:  {}", tab.title);
+            println!("  URL:    {}", tab.url);
+            let history = format_history(
+                tab.history_length,
+                tab.history_steps_back,
+                tab.history_steps_forward,
+                tab.history_hidden_count,
+            );
             println!(
-                "History: {}",
-                format_history(
-                    tab.history_length,
-                    tab.history_steps_back,
-                    tab.history_steps_forward,
-                    tab.history_hidden_count
-                ),
+                "  Pinned: {}  Discarded: {}  Audible: {}  Muted: {}  History: {}",
+                yn(tab.is_pinned),
+                yn(tab.is_discarded),
+                yn(tab.is_audible),
+                yn(tab.is_muted),
+                history,
+            );
+            println!(
+                "  Attention: {}  Awaiting auth: {}  Reader mode: {}  Incognito: {}",
+                yn(tab.has_attention),
+                yn(tab.is_awaiting_auth),
+                yn(tab.is_in_reader_mode),
+                yn(tab.incognito),
             );
         }
         CliResult::Unit => {}

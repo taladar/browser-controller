@@ -154,6 +154,14 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       title: changeInfo.title,
     });
   }
+  if (changeInfo.status !== undefined) {
+    pushEvent({
+      type: "TabStatusChanged",
+      tab_id: tabId,
+      window_id: tab.windowId,
+      status: changeInfo.status,
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

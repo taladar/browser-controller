@@ -226,6 +226,15 @@ pub enum BrowserEvent {
         /// The new title.
         title: String,
     },
+    /// A tab's loading status changed (e.g. from `loading` to `complete`).
+    TabStatusChanged {
+        /// The ID of the tab.
+        tab_id: u32,
+        /// The window containing the tab.
+        window_id: u32,
+        /// The new loading status.
+        status: TabStatus,
+    },
 }
 
 /// A command sent from the CLI to the mediator, and forwarded to the extension.
