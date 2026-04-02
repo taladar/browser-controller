@@ -37,9 +37,7 @@ for p in "${workspace_crates[@]}"; do
   fi
 done
 
-for p in "${workspace_crates[@]}"; do
-  cargo set-version --bump "${level}" -p "${p}"
-done
+cargo set-version --bump "${level}"
 
 for p in "${workspace_crates[@]}"; do
   p_tag_basename="${p//-/_}"
