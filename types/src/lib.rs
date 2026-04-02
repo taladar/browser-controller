@@ -270,6 +270,14 @@ pub enum CliCommand {
         insert_after_tab_id: Option<u32>,
         /// The URL to load in the new tab, or the browser's default new-tab page if absent.
         url: Option<String>,
+        /// If `true`, after the tab finishes loading the extension strips any `user:password@`
+        /// credentials from the URL and navigates to the clean URL.
+        ///
+        /// This causes Firefox to cache the credentials (satisfying future auth challenges
+        /// automatically) while leaving the tab displaying the URL without embedded credentials.
+        /// Requires `url` to be set; ignored when `url` is absent.
+        #[serde(default)]
+        strip_credentials: bool,
     },
     /// Activate a tab, making it the focused tab in its window.
     ActivateTab {

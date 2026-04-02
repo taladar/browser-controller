@@ -285,6 +285,14 @@ pub enum TabsCommand {
         /// URL to load in the new tab (defaults to the browser's new-tab page).
         #[clap(long)]
         url: Option<String>,
+        /// After the tab finishes loading, strip any embedded `user:password@` credentials
+        /// from the URL and navigate to the clean URL.
+        ///
+        /// Firefox caches the credentials from the initial load and uses them to satisfy
+        /// future auth challenges automatically, while the tab ends up displaying the URL
+        /// without visible credentials. Requires `--url`.
+        #[clap(long, requires = "url")]
+        strip_credentials: bool,
     },
     /// Activate a tab, making it the focused tab in its window.
     Activate {
@@ -875,11 +883,13 @@ fn tabs_command_to_cli(cmd: TabsCommand) -> CliCommand {
             before,
             after,
             url,
+            strip_credentials,
         } => CliCommand::OpenTab {
             window_id,
             insert_before_tab_id: before,
             insert_after_tab_id: after,
             url,
+            strip_credentials,
         },
         TabsCommand::Activate { tab_id } => CliCommand::ActivateTab { tab_id },
         TabsCommand::Navigate { tab_id, url } => CliCommand::NavigateTab { tab_id, url },
@@ -1119,6 +1129,7 @@ mod test {
             before: Some(3),
             after: None,
             url: None,
+            strip_credentials: false,
         };
         pretty_assertions::assert_eq!(
             tabs_command_to_cli(cmd),
@@ -1127,6 +1138,7 @@ mod test {
                 insert_before_tab_id: Some(3),
                 insert_after_tab_id: None,
                 url: None,
+                strip_credentials: false,
             }
         );
     }
@@ -1139,6 +1151,7 @@ mod test {
             before: None,
             after: Some(2),
             url: None,
+            strip_credentials: false,
         };
         pretty_assertions::assert_eq!(
             tabs_command_to_cli(cmd),
@@ -1147,6 +1160,7 @@ mod test {
                 insert_before_tab_id: None,
                 insert_after_tab_id: Some(2),
                 url: None,
+                strip_credentials: false,
             }
         );
     }

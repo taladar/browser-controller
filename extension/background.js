@@ -296,6 +296,7 @@ async function dispatch(commandType, params) {
         params.insert_before_tab_id ?? null,
         params.insert_after_tab_id ?? null,
         params.url ?? null,
+        params.strip_credentials ?? false,
       );
     case "ActivateTab":
       return cmdActivateTab(params.tab_id);
@@ -393,8 +394,33 @@ async function cmdListTabs(windowId) {
   };
 }
 
+/**
+ * Wait for a specific tab to reach "complete" status.
+ *
+ * Resolves immediately if the tab is already complete; otherwise waits for
+ * the next tabs.onUpdated event that sets status to "complete" for this tab.
+ *
+ * @param {number} tabId
+ * @returns {Promise<void>}
+ */
+async function waitForTabComplete(tabId) {
+  const current = await browser.tabs.get(tabId);
+  if (current.status === "complete") {
+    return;
+  }
+  await new Promise((resolve) => {
+    function onUpdated(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        browser.tabs.onUpdated.removeListener(onUpdated);
+        resolve();
+      }
+    }
+    browser.tabs.onUpdated.addListener(onUpdated, { tabId, properties: ["status"] });
+  });
+}
+
 /** Opens a new tab and returns its details. */
-async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url) {
+async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, stripCredentials) {
   const createProps = { windowId };
   if (insertBeforeTabId !== null) {
     const refTab = await browser.tabs.get(insertBeforeTabId);
@@ -406,7 +432,21 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url) {
   if (url !== null) {
     createProps.url = url;
   }
-  const tab = await browser.tabs.create(createProps);
+  let tab = await browser.tabs.create(createProps);
+
+  if (stripCredentials && url !== null) {
+    const parsed = new URL(url);
+    if (parsed.username !== "" || parsed.password !== "") {
+      parsed.username = "";
+      parsed.password = "";
+      const cleanUrl = parsed.href;
+      await waitForTabComplete(tab.id);
+      await browser.tabs.update(tab.id, { url: cleanUrl });
+      await waitForTabComplete(tab.id);
+      tab = await browser.tabs.get(tab.id);
+    }
+  }
+
   return { type: "Tab", ...await serializeTabDetails(tab) };
 }
 
