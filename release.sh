@@ -64,16 +64,27 @@ for p in "${workspace_binary_crates[@]}"; do
   debian_package_revision="$(cargo metadata --format-version 1 --no-deps | jq -r -C ".packages[] | select(.name == \"${package_name}\") | .metadata.deb.revision")"
 
   git cliff --config cliff-debian.toml --prepend changelog -u -t "${p_tag_basename}_${version}" --context --output context.json
-  jq 'map(if has("commits") then . else . + {"commits": []} end)' context.json | sponge context.json
-  jq < \
-  context.json \
-    --arg debian_package_name "${debian_package_name}" \
-    --arg debian_package_revision "${debian_package_revision}" \
-    '.[0] += { "extra": { "debian_package_name": $debian_package_name, "debian_package_revision": $debian_package_revision }}' \
-    >full_context.json
-  git cliff --config cliff-debian.toml --prepend changelog -u -t "${p_tag_basename}_${version}" --from-context full_context.json
-  tail -n +2 changelog | sponge changelog
-  rm context.json full_context.json
+  if [[ "$(cat context.json)" == "[]" ]]; then
+    # No relevant commits for this package: prepend an empty section manually.
+    {
+      printf '%s (%s-%s) unstable; urgency=medium\n\n' \
+        "${debian_package_name}" "${version}" "${debian_package_revision}"
+      printf '  * No changes in this package; see other browser-controller components.\n\n'
+      printf ' -- Matthias Hörmann <mhoermann@gmail.com>  %s\n\n' "$(date -R)"
+      cat changelog
+    } | sponge changelog
+  else
+    jq < \
+    context.json \
+      --arg debian_package_name "${debian_package_name}" \
+      --arg debian_package_revision "${debian_package_revision}" \
+      '.[0] += { "extra": { "debian_package_name": $debian_package_name, "debian_package_revision": $debian_package_revision }}' \
+      >full_context.json
+    git cliff --config cliff-debian.toml --prepend changelog -u -t "${p_tag_basename}_${version}" --from-context full_context.json
+    tail -n +2 changelog | sponge changelog
+    rm full_context.json
+  fi
+  rm context.json
   popd >/dev/null
 done
 
