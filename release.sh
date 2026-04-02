@@ -39,6 +39,10 @@ done
 
 cargo set-version --bump "${level}"
 
+# Update extension/manifest.json to match the new workspace version.
+extension_version="$(cargo get workspace.package.version)"
+jq --arg v "${extension_version}" '.version = $v' extension/manifest.json | sponge extension/manifest.json
+
 for p in "${workspace_crates[@]}"; do
   p_tag_basename="${p//-/_}"
   pushd "${p}" >/dev/null
@@ -71,7 +75,9 @@ done
 
 cargo build
 
-git add Cargo.toml Cargo.lock
+"$(dirname "${BASH_SOURCE[0]}")/package-extension.sh"
+
+git add Cargo.toml Cargo.lock extension/manifest.json
 
 for p in "${workspace_crates[@]}"; do
   pushd "${p}" >/dev/null
