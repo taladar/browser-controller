@@ -1,5 +1,7 @@
 # Chrome web store submission draft
 
+## Store listing tab
+
 Title from package:
 
 Browser Controller
@@ -53,3 +55,59 @@ English
 Homepage URL
 
 <https://github.com/taladar/browser-controller>
+
+## Privacy tab
+
+Single purpose:
+
+Retrieve information about and control tabs and windows from the command-line.
+
+nativeMessaging justification:
+
+Connect to the locally-installed browser-controller-mediator binary to receive
+and respond to CLI commands.
+
+scripting justification:
+
+Inject a content script to read window.history and window.navigation
+for accurate back/forward step counts, and to execute history.go() for
+GoBack/GoForward commands.
+
+sessions justification:
+
+Persist per-window title prefixes across browser restarts using
+sessions.setWindowValue / getWindowValue (Firefox only).
+
+tabs justification:
+
+Read tab metadata (URL, title, status, pin/mute state) and perform operations:
+open, close, activate, navigate, pin, mute, and move tabs.
+
+webRequest justification:
+
+Observe onAuthRequired events to track which tabs are awaiting HTTP
+authentication, reported in tab details.
+
+Host permission justification:
+
+Required by webRequest to observe authentication events on any URL, and by
+scripting to inject the history content script into any tab.
+
+Are you using remote code?
+
+No, I am not using remote code
+
+What user data do you plan to collect from users now or in the future?
+
+None
+
+I certify that the following disclosures are true:
+
+I do not sell or transfer user data to third parties, outside of the approved
+use cases
+
+I do not use or transfer user data for purposes that are unrelated to my item's
+single purpose
+
+I do not use or transfer user data to determine creditworthiness or for lending
+purposes
