@@ -320,28 +320,33 @@ fn path_basename(path: &str) -> Option<String> {
 /// first readable file. Returns `None` if no readable file is found.
 #[must_use]
 fn read_firefox_profiles_ini() -> Option<String> {
-    let home = directories::BaseDirs::new()
-        .map(|b| b.home_dir().to_path_buf())
-        .or_else(|| std::env::var("HOME").ok().map(std::path::PathBuf::from))?;
-
     #[cfg(target_os = "linux")]
-    let candidates: &[std::path::PathBuf] = &[
-        home.join(".mozilla/firefox/profiles.ini"),
-        home.join("snap/firefox/common/.mozilla/firefox/profiles.ini"),
-        home.join(".var/app/org.mozilla.firefox/.mozilla/firefox/profiles.ini"),
-    ];
-
-    #[cfg(target_os = "macos")]
-    let candidates: &[std::path::PathBuf] =
-        &[home.join("Library/Application Support/Firefox/profiles.ini")];
-
-    #[cfg(target_os = "windows")]
-    let candidates: &[std::path::PathBuf] = {
-        let appdata = std::env::var("APPDATA").unwrap_or_default();
-        &[std::path::Path::new(&appdata).join("Mozilla/Firefox/profiles.ini")]
+    let candidates: Vec<std::path::PathBuf> = {
+        let home = directories::BaseDirs::new()
+            .map(|b| b.home_dir().to_path_buf())
+            .or_else(|| std::env::var("HOME").ok().map(std::path::PathBuf::from))?;
+        vec![
+            home.join(".mozilla/firefox/profiles.ini"),
+            home.join("snap/firefox/common/.mozilla/firefox/profiles.ini"),
+            home.join(".var/app/org.mozilla.firefox/.mozilla/firefox/profiles.ini"),
+        ]
     };
 
-    for candidate in candidates {
+    #[cfg(target_os = "macos")]
+    let candidates: Vec<std::path::PathBuf> = {
+        let home = directories::BaseDirs::new()
+            .map(|b| b.home_dir().to_path_buf())
+            .or_else(|| std::env::var("HOME").ok().map(std::path::PathBuf::from))?;
+        vec![home.join("Library/Application Support/Firefox/profiles.ini")]
+    };
+
+    #[cfg(target_os = "windows")]
+    let candidates: Vec<std::path::PathBuf> = {
+        let appdata = std::env::var("APPDATA").unwrap_or_default();
+        vec![std::path::Path::new(&appdata).join("Mozilla/Firefox/profiles.ini")]
+    };
+
+    for candidate in &candidates {
         match fs_err::read_to_string(candidate) {
             Ok(content) => {
                 tracing::info!(path = %candidate.display(), "Found Firefox profiles.ini");

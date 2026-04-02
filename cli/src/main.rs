@@ -151,46 +151,56 @@ impl BrowserTarget {
     /// Return the directory where this browser looks for native messaging host manifests.
     #[must_use]
     fn manifest_dir(self, base: &directories::BaseDirs) -> std::path::PathBuf {
-        let home = base.home_dir();
-
         #[cfg(target_os = "linux")]
-        return match self {
-            Self::Firefox => home.join(".mozilla/native-messaging-hosts"),
-            Self::Librewolf => home.join(".librewolf/native-messaging-hosts"),
-            Self::Waterfox => home.join(".waterfox/native-messaging-hosts"),
-            Self::Chrome => home.join(".config/google-chrome/NativeMessagingHosts"),
-            Self::Chromium => home.join(".config/chromium/NativeMessagingHosts"),
-            Self::Brave => home.join(".config/BraveSoftware/Brave-Browser/NativeMessagingHosts"),
-            Self::Edge => home.join(".config/microsoft-edge/NativeMessagingHosts"),
-        };
+        {
+            let home = base.home_dir();
+            match self {
+                Self::Firefox => home.join(".mozilla/native-messaging-hosts"),
+                Self::Librewolf => home.join(".librewolf/native-messaging-hosts"),
+                Self::Waterfox => home.join(".waterfox/native-messaging-hosts"),
+                Self::Chrome => home.join(".config/google-chrome/NativeMessagingHosts"),
+                Self::Chromium => home.join(".config/chromium/NativeMessagingHosts"),
+                Self::Brave => {
+                    home.join(".config/BraveSoftware/Brave-Browser/NativeMessagingHosts")
+                }
+                Self::Edge => home.join(".config/microsoft-edge/NativeMessagingHosts"),
+            }
+        }
 
         #[cfg(target_os = "macos")]
-        return match self {
-            Self::Firefox => home.join("Library/Application Support/Mozilla/NativeMessagingHosts"),
-            Self::Librewolf => {
-                home.join("Library/Application Support/librewolf/NativeMessagingHosts")
+        {
+            let home = base.home_dir();
+            match self {
+                Self::Firefox => {
+                    home.join("Library/Application Support/Mozilla/NativeMessagingHosts")
+                }
+                Self::Librewolf => {
+                    home.join("Library/Application Support/librewolf/NativeMessagingHosts")
+                }
+                Self::Waterfox => {
+                    home.join("Library/Application Support/Waterfox/NativeMessagingHosts")
+                }
+                Self::Chrome => {
+                    home.join("Library/Application Support/Google/Chrome/NativeMessagingHosts")
+                }
+                Self::Chromium => {
+                    home.join("Library/Application Support/Chromium/NativeMessagingHosts")
+                }
+                Self::Brave => home.join(
+                    "Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts",
+                ),
+                Self::Edge => {
+                    home.join("Library/Application Support/Microsoft Edge/NativeMessagingHosts")
+                }
             }
-            Self::Waterfox => {
-                home.join("Library/Application Support/Waterfox/NativeMessagingHosts")
-            }
-            Self::Chrome => {
-                home.join("Library/Application Support/Google/Chrome/NativeMessagingHosts")
-            }
-            Self::Chromium => {
-                home.join("Library/Application Support/Chromium/NativeMessagingHosts")
-            }
-            Self::Brave => home.join(
-                "Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts",
-            ),
-            Self::Edge => {
-                home.join("Library/Application Support/Microsoft Edge/NativeMessagingHosts")
-            }
-        };
+        }
 
         // Windows: JSON manifest file lives under APPDATA or LOCALAPPDATA.
         // A registry key also points to it (written in install_manifest).
+        // `base` (home directory) is unused on Windows; bind it to suppress the warning.
         #[cfg(target_os = "windows")]
         {
+            let _base = base;
             let appdata = std::env::var("APPDATA").unwrap_or_default();
             let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
             match self {
