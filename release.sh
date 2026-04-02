@@ -64,6 +64,7 @@ for p in "${workspace_binary_crates[@]}"; do
   debian_package_revision="$(cargo metadata --format-version 1 --no-deps | jq -r -C ".packages[] | select(.name == \"${package_name}\") | .metadata.deb.revision")"
 
   git cliff --config cliff-debian.toml --prepend changelog -u -t "${p_tag_basename}_${version}" --context --output context.json
+  jq 'map(if has("commits") then . else . + {"commits": []} end)' context.json | sponge context.json
   jq < \
   context.json \
     --arg debian_package_name "${debian_package_name}" \
