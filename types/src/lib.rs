@@ -320,6 +320,16 @@ pub enum CliCommand {
         /// The ID of the tab to warm up.
         tab_id: u32,
     },
+    /// Mute a tab, suppressing any audio it produces.
+    MuteTab {
+        /// The ID of the tab to mute.
+        tab_id: u32,
+    },
+    /// Unmute a tab, allowing it to produce audio again.
+    UnmuteTab {
+        /// The ID of the tab to unmute.
+        tab_id: u32,
+    },
     /// Move a tab to a new position within its window.
     MoveTab {
         /// The ID of the tab to move.

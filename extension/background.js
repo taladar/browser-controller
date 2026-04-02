@@ -322,6 +322,10 @@ async function dispatch(commandType, params) {
       return cmdUnpinTab(params.tab_id);
     case "WarmupTab":
       return cmdWarmupTab(params.tab_id);
+    case "MuteTab":
+      return cmdMuteTab(params.tab_id);
+    case "UnmuteTab":
+      return cmdUnmuteTab(params.tab_id);
     case "MoveTab":
       return cmdMoveTab(params.tab_id, params.new_index);
     default:
@@ -482,6 +486,18 @@ async function cmdUnpinTab(tabId) {
 async function cmdWarmupTab(tabId) {
   await browser.tabs.warmup(tabId);
   return { type: "Unit" };
+}
+
+/** Mutes a tab and returns its updated details. */
+async function cmdMuteTab(tabId) {
+  const tab = await browser.tabs.update(tabId, { muted: true });
+  return { type: "Tab", ...await serializeTabDetails(tab) };
+}
+
+/** Unmutes a tab and returns its updated details. */
+async function cmdUnmuteTab(tabId) {
+  const tab = await browser.tabs.update(tabId, { muted: false });
+  return { type: "Tab", ...await serializeTabDetails(tab) };
 }
 
 /**

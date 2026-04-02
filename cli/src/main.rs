@@ -332,6 +332,18 @@ pub enum TabsCommand {
         #[clap(long)]
         tab_id: u32,
     },
+    /// Mute a tab, suppressing any audio it produces.
+    Mute {
+        /// Internal browser tab ID to mute (shown in `tabs list`).
+        #[clap(long)]
+        tab_id: u32,
+    },
+    /// Unmute a tab, allowing it to produce audio again.
+    Unmute {
+        /// Internal browser tab ID to unmute (shown in `tabs list`).
+        #[clap(long)]
+        tab_id: u32,
+    },
     /// Move a tab to a new position within its window.
     Move {
         /// Internal browser tab ID to move (shown in `tabs list`).
@@ -918,6 +930,8 @@ fn tabs_command_to_cli(cmd: TabsCommand) -> CliCommand {
         TabsCommand::Pin { tab_id } => CliCommand::PinTab { tab_id },
         TabsCommand::Unpin { tab_id } => CliCommand::UnpinTab { tab_id },
         TabsCommand::Warmup { tab_id } => CliCommand::WarmupTab { tab_id },
+        TabsCommand::Mute { tab_id } => CliCommand::MuteTab { tab_id },
+        TabsCommand::Unmute { tab_id } => CliCommand::UnmuteTab { tab_id },
         TabsCommand::Move { tab_id, new_index } => CliCommand::MoveTab { tab_id, new_index },
         TabsCommand::Back { tab_id, steps } => CliCommand::GoBack { tab_id, steps },
         TabsCommand::Forward { tab_id, steps } => CliCommand::GoForward { tab_id, steps },
