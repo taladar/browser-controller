@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4 - 2026-04-02 16:09:02Z
+
+### 📚 Documentation
+
+- Add correct per-crate badges to workspace and crate READMEs
+
 ## 0.1.3 - 2026-04-02 15:48:19Z
 
 ### 🐛 Bug Fixes
