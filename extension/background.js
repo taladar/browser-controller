@@ -1,8 +1,12 @@
 /**
- * Browser Controller — Firefox MV3 service worker.
+ * Browser Controller — MV3 service worker.
  *
  * Connects to the native messaging host (browser-controller-mediator) and
  * handles commands forwarded by the mediator to control windows and tabs.
+ *
+ * Supports Firefox (121+) and Chrome/Chromium-based browsers. Firefox-only
+ * features (title prefix, sessions API, tab warmup) are guarded by `isFirefox`
+ * and degrade to no-ops on Chrome.
  *
  * Protocol (mediator → extension):
  *   Length-prefixed JSON messages, each a CliRequest:
@@ -16,6 +20,18 @@
  */
 
 "use strict";
+
+// Chrome uses the 'chrome' namespace; alias it as 'browser' so all code below
+// works unchanged in both Firefox and Chrome.
+if (typeof browser === "undefined") {
+  globalThis.browser = chrome;
+}
+
+/**
+ * True when running in Firefox; false for Chrome/Chromium-based browsers.
+ * Used to gate Firefox-only API calls (titlePreface, sessions, warmup, etc.).
+ */
+const isFirefox = typeof browser.runtime.getBrowserInfo === "function";
 
 /** Name registered in the native messaging host manifest. */
 const NATIVE_HOST = "browser_controller";
@@ -47,7 +63,9 @@ let windowTitleSuffix = null;
 
 // Re-apply any stored titlePreface whenever a window appears (covers both
 // newly-created windows and windows restored by session restore).
+// Firefox-only: Chrome does not support titlePreface or the sessions API.
 browser.windows.onCreated.addListener(async (win) => {
+  if (!isFirefox) return;
   const prefix = await browser.sessions.getWindowValue(win.id, "titlePreface");
   if (prefix !== undefined) {
     await browser.windows.update(win.id, { titlePreface: prefix });
@@ -168,6 +186,28 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // Native messaging connection
 // ---------------------------------------------------------------------------
 
+/**
+ * Return browser identity information.
+ *
+ * In Firefox, delegates to `browser.runtime.getBrowserInfo()`.
+ * In Chrome/Chromium-based browsers, parses the user-agent string since no
+ * equivalent API exists.
+ *
+ * @returns {Promise<{name: string, vendor: string|null, version: string}>}
+ */
+async function fetchBrowserInfo() {
+  if (isFirefox) {
+    return browser.runtime.getBrowserInfo();
+  }
+  const ua = navigator.userAgent;
+  const chromeVersion = ua.match(/Chrome\/([\d.]+)/)?.[1] ?? "unknown";
+  if (ua.includes("Edg/")) {
+    const edgeVersion = ua.match(/Edg\/([\d.]+)/)?.[1] ?? chromeVersion;
+    return { name: "Edge", vendor: "Microsoft", version: edgeVersion };
+  }
+  return { name: "Chrome", vendor: "Google", version: chromeVersion };
+}
+
 /** Connect to the mediator and send the initial Hello message. */
 function connect() {
   console.info(`[browser-controller] Connecting to native host: ${NATIVE_HOST}`);
@@ -178,7 +218,7 @@ function connect() {
   // extractTitlePreface() can anchor its search before any ListWindows call.
   // The suffix is derived from vendor + name (e.g. "Mozilla" + "Firefox" →
   // " — Mozilla Firefox"); empty parts are skipped to handle forks cleanly.
-  browser.runtime.getBrowserInfo().then((info) => {
+  fetchBrowserInfo().then((info) => {
     const brand = [info.vendor, info.name].filter(Boolean).join(" ");
     windowTitleSuffix = ` \u2014 ${brand}`;
     const hello = {
@@ -387,6 +427,7 @@ async function cmdCloseWindow(windowId) {
 
 /** Sets the titlePreface (Firefox title prefix) for a window. */
 async function cmdSetWindowTitlePrefix(windowId, prefix) {
+  if (!isFirefox) return { type: "Unit" };
   await browser.windows.update(windowId, { titlePreface: prefix });
   await browser.sessions.setWindowValue(windowId, "titlePreface", prefix);
   return { type: "Unit" };
@@ -394,6 +435,7 @@ async function cmdSetWindowTitlePrefix(windowId, prefix) {
 
 /** Removes the titlePreface from a window. */
 async function cmdRemoveWindowTitlePrefix(windowId) {
+  if (!isFirefox) return { type: "Unit" };
   await browser.windows.update(windowId, { titlePreface: "" });
   await browser.sessions.removeWindowValue(windowId, "titlePreface");
   return { type: "Unit" };
@@ -484,6 +526,9 @@ async function cmdUnpinTab(tabId) {
 
 /** Warms up a discarded tab, loading its content into memory without activating it. */
 async function cmdWarmupTab(tabId) {
+  if (!browser.tabs.warmup) {
+    return { type: "Unit" };
+  }
   await browser.tabs.warmup(tabId);
   return { type: "Unit" };
 }
@@ -658,6 +703,7 @@ async function cmdMoveTab(tabId, newIndex) {
  * @returns {string|null}
  */
 function extractTitlePreface(win) {
+  if (!isFirefox) return null;
   const activeTab = (win.tabs ?? []).find((t) => t.active);
   const tabTitle = activeTab?.title;
   if (!tabTitle || !win.title) {
@@ -807,6 +853,7 @@ async function serializeTabDetails(tab) {
  * restore — are handled by the windows.onCreated listener registered above.
  */
 async function restoreTitlePrefaces() {
+  if (!isFirefox) return;
   const windows = await browser.windows.getAll();
   for (const win of windows) {
     const prefix = await browser.sessions.getWindowValue(win.id, "titlePreface");

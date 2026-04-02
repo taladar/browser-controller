@@ -88,6 +88,14 @@ pub enum Error {
         "mediator binary not found next to this executable; use --mediator-path to specify its location"
     )]
     MediatorNotFound,
+
+    /// `--extension-id` is required for Chromium-family browsers but was not supplied.
+    #[error(
+        "Chromium-family browsers require --extension-id; \
+         find the ID on chrome://extensions after loading the unpacked extension \
+         (a 32-character lowercase letter string)"
+    )]
+    ChromiumExtensionIdRequired,
 }
 
 /// The native messaging protocol family, which determines the JSON manifest format.
@@ -100,6 +108,8 @@ pub enum Error {
 enum BrowserFamily {
     /// Gecko-based browsers (Firefox and its forks); manifest uses `allowed_extensions`.
     Gecko,
+    /// Chromium-based browsers (Chrome, Chromium, Brave, Edge, …); manifest uses `allowed_origins`.
+    Chromium,
 }
 
 /// Browser to install the native messaging host manifest for.
@@ -111,6 +121,14 @@ pub enum BrowserTarget {
     Librewolf,
     /// Waterfox (performance-focused Firefox fork).
     Waterfox,
+    /// Google Chrome.
+    Chrome,
+    /// Chromium (open-source Chrome base).
+    Chromium,
+    /// Brave Browser (privacy-focused Chromium fork).
+    Brave,
+    /// Microsoft Edge (Chromium-based).
+    Edge,
 }
 
 impl BrowserTarget {
@@ -121,6 +139,7 @@ impl BrowserTarget {
     const fn family(self) -> BrowserFamily {
         match self {
             Self::Firefox | Self::Librewolf | Self::Waterfox => BrowserFamily::Gecko,
+            Self::Chrome | Self::Chromium | Self::Brave | Self::Edge => BrowserFamily::Chromium,
         }
     }
 
@@ -132,6 +151,10 @@ impl BrowserTarget {
             Self::Firefox => home.join(".mozilla/native-messaging-hosts"),
             Self::Librewolf => home.join(".librewolf/native-messaging-hosts"),
             Self::Waterfox => home.join(".waterfox/native-messaging-hosts"),
+            Self::Chrome => home.join(".config/google-chrome/NativeMessagingHosts"),
+            Self::Chromium => home.join(".config/chromium/NativeMessagingHosts"),
+            Self::Brave => home.join(".config/BraveSoftware/Brave-Browser/NativeMessagingHosts"),
+            Self::Edge => home.join(".config/microsoft-edge/NativeMessagingHosts"),
         }
     }
 }
@@ -214,6 +237,13 @@ pub enum Command {
         /// own executable.
         #[clap(long)]
         mediator_path: Option<std::path::PathBuf>,
+        /// Chromium extension ID (required for Chrome, Chromium, Brave, Edge).
+        ///
+        /// Find this on chrome://extensions after loading the unpacked extension.
+        /// It is a 32-character lowercase letter string, e.g.
+        /// "abcdefghijklmnopabcdefghijklmnop". Not used for Gecko-family browsers.
+        #[clap(long)]
+        extension_id: Option<String>,
     },
 }
 
@@ -820,6 +850,28 @@ struct GeckoManifest<'a> {
     allowed_extensions: &'a [&'a str],
 }
 
+/// JSON structure of a Chromium-family native messaging host manifest.
+///
+/// Written to the browser's NativeMessagingHosts directory as `browser_controller.json`.
+/// Unlike the Gecko format, Chromium identifies allowed extensions by origin URL rather
+/// than extension ID string.
+#[derive(Debug, serde::Serialize)]
+struct ChromiumManifest<'a> {
+    /// The registered name of the native messaging host.
+    name: &'a str,
+    /// Human-readable description of the host.
+    description: &'a str,
+    /// Absolute path to the native messaging host binary.
+    path: &'a std::path::Path,
+    /// Transport type; always `"stdio"` for native messaging hosts.
+    #[serde(rename = "type")]
+    kind: &'a str,
+    /// Extension origin URLs allowed to connect to this host.
+    ///
+    /// Each entry has the form `"chrome-extension://<extension-id>/"`.
+    allowed_origins: &'a [String],
+}
+
 /// Result of a successful manifest installation, used for JSON output.
 #[derive(Debug, serde::Serialize)]
 struct InstallManifestResult<'a> {
@@ -834,8 +886,8 @@ struct InstallManifestResult<'a> {
 /// # Errors
 ///
 /// Returns an error if the home directory cannot be determined, the mediator binary cannot
-/// be found automatically, the manifest directory cannot be created, or the manifest file
-/// cannot be written.
+/// be found automatically, the manifest directory cannot be created, the manifest file
+/// cannot be written, or a Chromium-family browser is selected without `--extension-id`.
 #[expect(
     clippy::print_stdout,
     reason = "manifest installation result goes to stdout by design"
@@ -843,6 +895,7 @@ struct InstallManifestResult<'a> {
 fn install_manifest(
     browser: BrowserTarget,
     mediator_path: Option<std::path::PathBuf>,
+    extension_id: Option<String>,
     format: OutputFormat,
 ) -> Result<(), Error> {
     let base = directories::BaseDirs::new().ok_or(Error::NoBrowserHome)?;
@@ -873,6 +926,18 @@ fn install_manifest(
                 path: &mediator_path,
                 kind: "stdio",
                 allowed_extensions: &["browser-controller@taladar.net"],
+            };
+            serde_json::to_string_pretty(&manifest)?
+        }
+        BrowserFamily::Chromium => {
+            let id = extension_id.ok_or(Error::ChromiumExtensionIdRequired)?;
+            let origin = format!("chrome-extension://{id}/");
+            let manifest = ChromiumManifest {
+                name: "browser_controller",
+                description: "Browser Controller Mediator",
+                path: &mediator_path,
+                kind: "stdio",
+                allowed_origins: &[origin],
             };
             serde_json::to_string_pretty(&manifest)?
         }
@@ -1016,8 +1081,14 @@ async fn do_stuff() -> Result<(), Error> {
         Command::InstallManifest {
             browser,
             mediator_path,
+            extension_id,
         } => {
-            install_manifest(*browser, mediator_path.clone(), cli.output)?;
+            install_manifest(
+                *browser,
+                mediator_path.clone(),
+                extension_id.clone(),
+                cli.output,
+            )?;
             return Ok(());
         }
         Command::Windows(_) | Command::Tabs(_) | Command::EventStream => {}

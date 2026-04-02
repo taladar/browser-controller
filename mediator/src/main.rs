@@ -444,16 +444,101 @@ fn firefox_default_profile_id(ini_content: &str) -> Option<String> {
     }
 }
 
-/// Determine the Firefox profile ID for the process with the given PID.
+/// Which browser family the parent process belongs to.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserKind {
+    /// Firefox or a Firefox-compatible fork (LibreWolf, Waterfox, …).
+    Firefox,
+    /// Chrome, Chromium, or a Chromium-based browser (Brave, Edge, …).
+    Chrome,
+    /// Browser family could not be determined from the command line.
+    Unknown,
+}
+
+/// Detect the browser family from the parent process command-line arguments.
+///
+/// Inspects `argv[0]` (the executable name / path) for well-known substrings that
+/// identify Firefox-family or Chrome-family browsers.
+#[cfg(target_os = "linux")]
+fn detect_browser_from_cmdline(args: &[&str]) -> BrowserKind {
+    let exe = args.first().copied().unwrap_or("").to_ascii_lowercase();
+    let exe_name = std::path::Path::new(&exe)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map_or_else(|| exe.clone(), str::to_ascii_lowercase);
+    if exe_name.contains("firefox")
+        || exe_name.contains("librewolf")
+        || exe_name.contains("waterfox")
+    {
+        return BrowserKind::Firefox;
+    }
+    if exe_name.contains("chrome")
+        || exe_name.contains("chromium")
+        || exe_name.contains("brave")
+        || exe_name.contains("msedge")
+        || exe_name.contains("opera")
+        || exe_name.contains("vivaldi")
+    {
+        return BrowserKind::Chrome;
+    }
+    BrowserKind::Unknown
+}
+
+/// Determine the Chrome/Chromium profile ID from the parent process command-line arguments.
 ///
 /// Resolution order:
-/// 1. `--profile <path>` in the process command line → basename of the path.
+/// 1. `--profile-directory=<name>` present → return that value.
+/// 2. `--user-data-dir=<path>` present → return the basename of the path.
+/// 3. Neither flag present → return `Some("Default".to_owned())`.
+#[cfg(target_os = "linux")]
+fn chrome_profile_id_from_args(args: &[&str]) -> Option<String> {
+    let mut profile_dir: Option<&str> = None;
+    let mut user_data_dir: Option<&str> = None;
+
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--profile-directory=") {
+            profile_dir = Some(val);
+        } else if let Some(val) = arg.strip_prefix("--user-data-dir=") {
+            user_data_dir = Some(val);
+        }
+    }
+
+    if let Some(dir) = profile_dir {
+        tracing::info!(
+            profile_dir = dir,
+            "Chrome profile from --profile-directory flag"
+        );
+        return Some(dir.to_owned());
+    }
+    if let Some(dir) = user_data_dir {
+        tracing::info!(
+            user_data_dir = dir,
+            "Chrome profile from --user-data-dir flag basename"
+        );
+        return path_basename(dir);
+    }
+    tracing::info!("No Chrome profile flags found; using Default");
+    Some("Default".to_owned())
+}
+
+/// Determine the browser profile ID for the process with the given PID.
+///
+/// First detects the browser family from `argv[0]`, then applies the appropriate
+/// profile-resolution strategy:
+///
+/// **Firefox/LibreWolf/Waterfox** (resolution order):
+/// 1. `--profile <path>` in the command line → basename of the path.
 /// 2. `-P <name>` in the command line → look up the named profile in `profiles.ini`.
-/// 3. No profile flag → read the default profile from `profiles.ini`
+/// 3. No explicit flag → read the default profile from `profiles.ini`
 ///    (`[Install*]` → `Default=`, or `[Profile*]` with `Default=1`).
 ///
-/// Returns `None` if the command line cannot be read, no profile can be determined,
-/// or `profiles.ini` is absent/unreadable.
+/// **Chrome/Chromium/Brave/Edge** (resolution order):
+/// 1. `--profile-directory=<name>` present → return that value.
+/// 2. `--user-data-dir=<path>` present → return the basename of the path.
+/// 3. Neither flag present → return `Some("Default".to_owned())`.
+///
+/// Returns `None` if the command line cannot be read or no profile can be determined.
 #[cfg(target_os = "linux")]
 fn read_parent_profile_id(ppid: u32) -> Option<String> {
     let cmdline = match fs_err::read(format!("/proc/{ppid}/cmdline")) {
@@ -472,29 +557,41 @@ fn read_parent_profile_id(ppid: u32) -> Option<String> {
 
     tracing::debug!(args = ?args, "Parent process command line");
 
-    for window in args.windows(2) {
-        if let [flag, value] = window {
-            if *flag == "--profile" || *flag == "-profile" {
-                tracing::info!(path = *value, "Profile determined from cmdline flag");
-                return path_basename(value);
+    let browser_kind = detect_browser_from_cmdline(&args);
+    tracing::debug!(browser_kind = ?browser_kind, "Detected browser kind from cmdline");
+
+    match browser_kind {
+        BrowserKind::Chrome => chrome_profile_id_from_args(&args),
+        BrowserKind::Unknown => {
+            tracing::info!("Unknown browser kind; profile ID unavailable");
+            None
+        }
+        BrowserKind::Firefox => {
+            for window in args.windows(2) {
+                if let [flag, value] = window {
+                    if *flag == "--profile" || *flag == "-profile" {
+                        tracing::info!(path = *value, "Profile determined from cmdline flag");
+                        return path_basename(value);
+                    }
+                    if *flag == "-P" {
+                        tracing::info!(
+                            name = *value,
+                            "Named profile from -P flag; looking up in profiles.ini"
+                        );
+                        let ini = read_firefox_profiles_ini()?;
+                        return firefox_profile_id_from_name(&ini, value);
+                    }
+                }
             }
-            if *flag == "-P" {
-                tracing::info!(
-                    name = *value,
-                    "Named profile from -P flag; looking up in profiles.ini"
-                );
-                let ini = read_firefox_profiles_ini()?;
-                return firefox_profile_id_from_name(&ini, value);
-            }
+
+            // No explicit profile flag: fall back to the default profile.
+            tracing::info!("No profile flag in cmdline; reading default profile from profiles.ini");
+            let ini = read_firefox_profiles_ini()?;
+            let result = firefox_default_profile_id(&ini);
+            tracing::info!(profile_id = ?result, "Profile ID from profiles.ini");
+            result
         }
     }
-
-    // No explicit profile flag: fall back to the default profile.
-    tracing::info!("No profile flag in cmdline; reading default profile from profiles.ini");
-    let ini = read_firefox_profiles_ini()?;
-    let result = firefox_default_profile_id(&ini);
-    tracing::info!(profile_id = ?result, "Profile ID from profiles.ini");
-    result
 }
 
 /// Returns `None` on non-Linux platforms where `/proc` is unavailable.

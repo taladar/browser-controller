@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Native messaging bridge for browser-controller CLI",
   "background": {
-    "scripts": ["background.js"]
+    "service_worker": "background.js"
   },
   "permissions": [
     "nativeMessaging",
@@ -19,7 +19,7 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "browser-controller@taladar.net",
-      "strict_min_version": "109.0"
+      "strict_min_version": "121.0"
     }
   }
 }
