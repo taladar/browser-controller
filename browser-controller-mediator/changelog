@@ -1,3 +1,11 @@
+browser-controller-mediator (0.1.1-1) unstable; urgency=medium
+
+  * Features Implement browser-controller workspace with mediator, CLI, and extension
+  * Features - cross-platform - Add macOS and Windows support
+  * Bug fixes - mediator - Keep socket guard alive for full duration of run()
+  * Refactor - workspace - Rename crate dirs to full names, add per-crate release tooling
+
+ -- Matthias Hörmann <mhoermann@gmail.com>  Thu, 02 Apr 2026 14:23:33 +0200
 browser-controller-mediator (0.1.0-1) unstable; urgency=medium
 
   * initial release

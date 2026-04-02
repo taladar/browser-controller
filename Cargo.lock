@@ -111,7 +111,7 @@ checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
 name = "browser-controller-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "browser-controller-types",
  "clap",
@@ -135,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "browser-controller-mediator"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "browser-controller-types",
  "directories",
@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "browser-controller-types"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pretty_assertions",
  "serde",
