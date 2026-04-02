@@ -10,12 +10,7 @@ publish.workspace = true
 repository.workspace = true
 keywords = ["browser", "automation", "native-messaging", "firefox", "chrome"]
 categories = ["data-structures"]
-exclude = [
-    ".env",
-    "cliff.toml",
-    "tarpaulin-report.html",
-    "tarpaulin-report.json",
-]
+exclude = [".env", "cliff.toml", "tarpaulin-report.html", "tarpaulin-report.json"]
 
 [dependencies]
 serde = { workspace = true }
