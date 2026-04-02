@@ -11,6 +11,11 @@ use serde::{Deserialize, Serialize};
 pub struct BrowserInfo {
     /// Human-readable browser name (e.g. "Firefox", "Chrome").
     pub browser_name: String,
+    /// Browser vendor (e.g. "Mozilla").
+    ///
+    /// `None` when not reported by the browser (non-Firefox browsers or older versions).
+    #[serde(default)]
+    pub browser_vendor: Option<String>,
     /// Browser version string (e.g. "120.0").
     pub browser_version: String,
     /// PID of the browser's main process.
@@ -308,6 +313,11 @@ pub struct CliResponse {
 pub struct ExtensionHello {
     /// The name of the browser (e.g. "Firefox").
     pub browser_name: String,
+    /// The browser vendor (e.g. "Mozilla").
+    ///
+    /// `None` on browsers that do not implement `browser.runtime.getBrowserInfo()`.
+    #[serde(default)]
+    pub browser_vendor: Option<String>,
     /// The browser version string (e.g. "120.0").
     pub browser_version: String,
 }
@@ -391,6 +401,7 @@ mod test {
     fn extension_hello_round_trip() {
         let msg = ExtensionMessage::Hello(super::ExtensionHello {
             browser_name: "Firefox".to_owned(),
+            browser_vendor: Some("Mozilla".to_owned()),
             browser_version: "120.0".to_owned(),
         });
         let json = serde_json::to_string(&msg)

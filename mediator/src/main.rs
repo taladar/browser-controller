@@ -508,17 +508,28 @@ async fn run() -> Result<(), Error> {
                 let profile_id = read_parent_profile_id(ppid_u32);
                 let info = browser_controller_types::BrowserInfo {
                     browser_name: hello.browser_name.clone(),
+                    browser_vendor: hello.browser_vendor.clone(),
                     browser_version: hello.browser_version.clone(),
                     pid: ppid_u32,
                     profile_id: profile_id.clone(),
                 };
+                let vendor_str = hello
+                    .browser_vendor
+                    .as_deref()
+                    .map(|v| format!(" ({v})"))
+                    .unwrap_or_default();
+                let profile_str = profile_id
+                    .as_deref()
+                    .map(|p| format!(", profile {p}"))
+                    .unwrap_or_default();
                 tracing::info!(
                     mediator_pid = std::process::id(),
                     browser_name = %hello.browser_name,
+                    browser_vendor = ?hello.browser_vendor,
                     browser_version = %hello.browser_version,
                     browser_pid = ppid_u32,
                     profile_id = ?profile_id,
-                    "Connected to browser instance",
+                    "Connected to browser instance: {}{} {}, pid {}{}", hello.browser_name, vendor_str, hello.browser_version, ppid_u32, profile_str,
                 );
                 break info;
             }

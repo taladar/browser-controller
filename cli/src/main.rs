@@ -349,6 +349,8 @@ struct DiscoveredInstanceJson<'a> {
     socket_path: &'a std::path::Path,
     /// Human-readable browser name.
     browser_name: &'a str,
+    /// Browser vendor (e.g. "Mozilla"), if reported.
+    browser_vendor: Option<&'a str>,
     /// Browser version string.
     browser_version: &'a str,
     /// Browser main process PID.
@@ -563,14 +565,15 @@ async fn send_command(
 )]
 fn print_instances_human(instances: &[DiscoveredInstance]) -> Result<(), Error> {
     println!(
-        "{:<8} {:<14} {:<10} {:<30} SOCKET",
-        "PID", "BROWSER", "VERSION", "PROFILE"
+        "{:<8} {:<14} {:<10} {:<10} {:<30} SOCKET",
+        "PID", "BROWSER", "VENDOR", "VERSION", "PROFILE"
     );
     for inst in instances {
         println!(
-            "{:<8} {:<14} {:<10} {:<30} {}",
+            "{:<8} {:<14} {:<10} {:<10} {:<30} {}",
             inst.info.pid,
             inst.info.browser_name,
+            inst.info.browser_vendor.as_deref().unwrap_or("-"),
             inst.info.browser_version,
             inst.info.profile_id.as_deref().unwrap_or("-"),
             inst.socket_path.display(),
@@ -594,6 +597,7 @@ fn print_instances_json(instances: &[DiscoveredInstance]) -> Result<(), Error> {
         .map(|i| DiscoveredInstanceJson {
             socket_path: &i.socket_path,
             browser_name: &i.info.browser_name,
+            browser_vendor: i.info.browser_vendor.as_deref(),
             browser_version: &i.info.browser_version,
             pid: i.info.pid,
             profile_id: i.info.profile_id.as_deref(),
@@ -616,6 +620,9 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
     match result {
         CliResult::BrowserInfo(info) => {
             println!("Browser: {} {}", info.browser_name, info.browser_version);
+            if let Some(vendor) = &info.browser_vendor {
+                println!("Vendor:  {vendor}");
+            }
             println!("PID:     {}", info.pid);
             if let Some(profile) = &info.profile_id {
                 println!("Profile: {profile}");

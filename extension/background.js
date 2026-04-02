@@ -9,7 +9,7 @@
  *   { "request_id": "<uuid>", "type": "<CommandVariant>", ... }
  *
  * Protocol (extension → mediator):
- *   On connect:  { "message_type": "Hello", "browser_name": "...", "browser_version": "..." }
+ *   On connect:  { "message_type": "Hello", "browser_name": "...", "browser_vendor": "...", "browser_version": "..." }
  *   On response: { "message_type": "Response", "request_id": "<uuid>",
  *                  "outcome": { "status": "ok"|"err", "data": <CliResult>|<string> } }
  */
@@ -95,6 +95,7 @@ function connect() {
     nativePort.postMessage({
       message_type: "Hello",
       browser_name: info.name,
+      browser_vendor: info.vendor || null,
       browser_version: info.version,
     });
   });
