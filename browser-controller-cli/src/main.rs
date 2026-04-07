@@ -72,6 +72,10 @@ pub enum Error {
     #[error("command failed: {0}")]
     CommandFailed(String),
 
+    /// An internal CLI command mapping error occurred (should never happen).
+    #[error("invalid CLI command mapping: {0}")]
+    InvalidCliCommandMapping(String),
+
     /// A log filter expression could not be parsed.
     #[error("failed to parse log filter: {0}")]
     LogFilter(#[from] tracing_subscriber::filter::ParseError),
@@ -489,6 +493,21 @@ pub enum TabsCommand {
         /// when those pages redirect immediately backward again.
         #[clap(long, default_value_t = 1u32)]
         steps: u32,
+    },
+    /// Sort tabs in a window according to specified domain order.
+    Sort {
+        /// ID of the window whose tabs to sort.
+        #[clap(long)]
+        window_id: u32,
+        /// List of domains in the desired sort order. Tabs with domains not in this list
+        /// will be placed after all listed domains, maintaining their original relative order.
+        /// Tabs with the same domain will also maintain their original relative order (stable sort).
+        #[clap(
+            long,
+            value_delimiter = ',',
+            help = "Comma-separated list of domains to sort by"
+        )]
+        domains: Vec<String>,
     },
 }
 
@@ -1138,33 +1157,37 @@ fn print_result(result: &CliResult, format: OutputFormat) -> Result<(), Error> {
 }
 
 /// Convert a [`TabsCommand`] into the corresponding [`CliCommand`].
-fn tabs_command_to_cli(cmd: TabsCommand) -> CliCommand {
+fn tabs_command_to_cli(cmd: TabsCommand) -> Result<CliCommand, Error> {
     match cmd {
-        TabsCommand::List { window_id } => CliCommand::ListTabs { window_id },
+        TabsCommand::List { window_id } => Ok(CliCommand::ListTabs { window_id }),
         TabsCommand::Open {
             window_id,
             before,
             after,
             url,
             strip_credentials,
-        } => CliCommand::OpenTab {
+        } => Ok(CliCommand::OpenTab {
             window_id,
             insert_before_tab_id: before,
             insert_after_tab_id: after,
             url,
             strip_credentials,
-        },
-        TabsCommand::Activate { tab_id } => CliCommand::ActivateTab { tab_id },
-        TabsCommand::Navigate { tab_id, url } => CliCommand::NavigateTab { tab_id, url },
-        TabsCommand::Close { tab_id } => CliCommand::CloseTab { tab_id },
-        TabsCommand::Pin { tab_id } => CliCommand::PinTab { tab_id },
-        TabsCommand::Unpin { tab_id } => CliCommand::UnpinTab { tab_id },
-        TabsCommand::Warmup { tab_id } => CliCommand::WarmupTab { tab_id },
-        TabsCommand::Mute { tab_id } => CliCommand::MuteTab { tab_id },
-        TabsCommand::Unmute { tab_id } => CliCommand::UnmuteTab { tab_id },
-        TabsCommand::Move { tab_id, new_index } => CliCommand::MoveTab { tab_id, new_index },
-        TabsCommand::Back { tab_id, steps } => CliCommand::GoBack { tab_id, steps },
-        TabsCommand::Forward { tab_id, steps } => CliCommand::GoForward { tab_id, steps },
+        }),
+        TabsCommand::Activate { tab_id } => Ok(CliCommand::ActivateTab { tab_id }),
+        TabsCommand::Navigate { tab_id, url } => Ok(CliCommand::NavigateTab { tab_id, url }),
+        TabsCommand::Close { tab_id } => Ok(CliCommand::CloseTab { tab_id }),
+        TabsCommand::Pin { tab_id } => Ok(CliCommand::PinTab { tab_id }),
+        TabsCommand::Unpin { tab_id } => Ok(CliCommand::UnpinTab { tab_id }),
+        TabsCommand::Warmup { tab_id } => Ok(CliCommand::WarmupTab { tab_id }),
+        TabsCommand::Mute { tab_id } => Ok(CliCommand::MuteTab { tab_id }),
+        TabsCommand::Unmute { tab_id } => Ok(CliCommand::UnmuteTab { tab_id }),
+        TabsCommand::Move { tab_id, new_index } => Ok(CliCommand::MoveTab { tab_id, new_index }),
+        TabsCommand::Back { tab_id, steps } => Ok(CliCommand::GoBack { tab_id, steps }),
+        TabsCommand::Forward { tab_id, steps } => Ok(CliCommand::GoForward { tab_id, steps }),
+        TabsCommand::Sort { .. } => Err(Error::InvalidCliCommandMapping(
+            "TabsCommand::Sort should be handled directly and not passed to tabs_command_to_cli"
+                .to_owned(),
+        )),
     }
 }
 
@@ -1293,7 +1316,86 @@ async fn do_stuff() -> Result<(), Error> {
                 CliCommand::RemoveWindowTitlePrefix { window_id }
             }
         },
-        Command::Tabs(t) => tabs_command_to_cli(t.command),
+        Command::Tabs(TabsArgs {
+            command: TabsCommand::Sort { window_id, domains },
+        }) => {
+            // Get all tabs in the window
+            let list_tabs_result =
+                send_command(&instance.socket_path, CliCommand::ListTabs { window_id }).await?;
+
+            let CliResult::Tabs { mut tabs } = list_tabs_result else {
+                return Err(Error::CommandFailed(format!(
+                    "unexpected response to ListTabs: {list_tabs_result:?}"
+                )));
+            };
+
+            // Store original indices to maintain stable sort for unlisted domains and same domains
+            let original_tab_order: Vec<_> = tabs.iter().map(|t| t.id).collect();
+
+            // Create a domain priority map
+            let domain_priority: std::collections::HashMap<String, usize> = domains
+                .iter()
+                .enumerate()
+                .map(|(i, d)| (d.clone(), i))
+                .collect();
+
+            // Sort tabs
+            tabs.sort_by(|a, b| {
+                let domain_a = url::Url::parse(&a.url)
+                    .ok()
+                    .and_then(|u| u.domain().map(|s| s.to_owned()))
+                    .unwrap_or_default();
+                let domain_b = url::Url::parse(&b.url)
+                    .ok()
+                    .and_then(|u| u.domain().map(|s| s.to_owned()))
+                    .unwrap_or_default();
+
+                let priority_a = domain_priority.get(&domain_a).copied();
+                let priority_b = domain_priority.get(&domain_b).copied();
+
+                match (priority_a, priority_b) {
+                    (Some(pa), Some(pb)) => pa.cmp(&pb), // Both domains are in the list
+                    (Some(_), None) => std::cmp::Ordering::Less, // A is in list, B is not
+                    (None, Some(_)) => std::cmp::Ordering::Greater, // B is in list, A is not
+                    (None, None) => {
+                        // Neither domain is in the list or both are empty, maintain original order
+                        let original_index_a = original_tab_order
+                            .iter()
+                            .position(|&id| id == a.id)
+                            .unwrap_or_default();
+                        let original_index_b = original_tab_order
+                            .iter()
+                            .position(|&id| id == b.id)
+                            .unwrap_or_default();
+                        original_index_a.cmp(&original_index_b)
+                    }
+                }
+            });
+
+            // Send move commands for tabs that are out of place
+            for (new_index, tab) in tabs.into_iter().enumerate() {
+                #[expect(
+                    clippy::as_conversions,
+                    reason = "Tab index values are small enough that overflows are never an issue"
+                )]
+                if (tab.index as usize) != new_index {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "Tab index values (and for that matter values coming out of enumerate) are small enough that overflows are never an issue"
+                    )]
+                    send_command(
+                        &instance.socket_path,
+                        CliCommand::MoveTab {
+                            tab_id: tab.id,
+                            new_index: new_index as u32,
+                        },
+                    )
+                    .await?;
+                }
+            }
+            return Ok(()); // Early return as all commands are sent
+        }
+        Command::Tabs(t) => tabs_command_to_cli(t.command)?,
         Command::Instances
         | Command::EventStream
         | Command::GenerateManpage { .. }
@@ -1402,7 +1504,7 @@ mod test {
 
     /// Verify that `--before <tab-id>` maps to `insert_before_tab_id = Some(tab_id)`.
     #[test]
-    fn tabs_open_before() {
+    fn tabs_open_before() -> Result<(), crate::Error> {
         let cmd = super::TabsCommand::Open {
             window_id: 1,
             before: Some(3),
@@ -1411,20 +1513,21 @@ mod test {
             strip_credentials: false,
         };
         pretty_assertions::assert_eq!(
-            tabs_command_to_cli(cmd),
+            tabs_command_to_cli(cmd)?,
             CliCommand::OpenTab {
                 window_id: 1,
                 insert_before_tab_id: Some(3),
                 insert_after_tab_id: None,
                 url: None,
                 strip_credentials: false,
-            }
+            },
         );
+        Ok(())
     }
 
     /// Verify that `--after <tab-id>` maps to `insert_after_tab_id = Some(tab_id)`.
     #[test]
-    fn tabs_open_after() {
+    fn tabs_open_after() -> Result<(), crate::Error> {
         let cmd = super::TabsCommand::Open {
             window_id: 1,
             before: None,
@@ -1433,7 +1536,7 @@ mod test {
             strip_credentials: false,
         };
         pretty_assertions::assert_eq!(
-            tabs_command_to_cli(cmd),
+            tabs_command_to_cli(cmd)?,
             CliCommand::OpenTab {
                 window_id: 1,
                 insert_before_tab_id: None,
@@ -1442,5 +1545,6 @@ mod test {
                 strip_credentials: false,
             }
         );
+        Ok(())
     }
 }
