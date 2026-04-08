@@ -410,6 +410,9 @@ pub enum TabsCommand {
         /// without visible credentials. Requires `--url`.
         #[clap(long, requires = "url")]
         strip_credentials: bool,
+        /// Open the new tab in the background, keeping the currently active tab focused.
+        #[clap(long)]
+        background: bool,
     },
     /// Activate a tab, making it the focused tab in its window.
     Activate {
@@ -1166,12 +1169,14 @@ fn tabs_command_to_cli(cmd: TabsCommand) -> Result<CliCommand, Error> {
             after,
             url,
             strip_credentials,
+            background,
         } => Ok(CliCommand::OpenTab {
             window_id,
             insert_before_tab_id: before,
             insert_after_tab_id: after,
             url,
             strip_credentials,
+            background,
         }),
         TabsCommand::Activate { tab_id } => Ok(CliCommand::ActivateTab { tab_id }),
         TabsCommand::Navigate { tab_id, url } => Ok(CliCommand::NavigateTab { tab_id, url }),
@@ -1511,6 +1516,7 @@ mod test {
             after: None,
             url: None,
             strip_credentials: false,
+            background: false,
         };
         pretty_assertions::assert_eq!(
             tabs_command_to_cli(cmd)?,
@@ -1520,6 +1526,7 @@ mod test {
                 insert_after_tab_id: None,
                 url: None,
                 strip_credentials: false,
+                background: false,
             },
         );
         Ok(())
@@ -1534,6 +1541,7 @@ mod test {
             after: Some(2),
             url: None,
             strip_credentials: false,
+            background: false,
         };
         pretty_assertions::assert_eq!(
             tabs_command_to_cli(cmd)?,
@@ -1543,6 +1551,7 @@ mod test {
                 insert_after_tab_id: Some(2),
                 url: None,
                 strip_credentials: false,
+                background: false,
             }
         );
         Ok(())

@@ -345,6 +345,7 @@ async function dispatch(commandType, params) {
         params.insert_after_tab_id ?? null,
         params.url ?? null,
         params.strip_credentials ?? false,
+        params.background ?? false,
       );
     case "ActivateTab":
       return cmdActivateTab(params.tab_id);
@@ -476,8 +477,8 @@ async function waitForTabComplete(tabId) {
 }
 
 /** Opens a new tab and returns its details. */
-async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, stripCredentials) {
-  const createProps = { windowId };
+async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, stripCredentials, background) {
+  const createProps = { windowId, active: !background };
   if (insertBeforeTabId !== null) {
     const refTab = await browser.tabs.get(insertBeforeTabId);
     createProps.index = refTab.index;

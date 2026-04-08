@@ -287,6 +287,10 @@ pub enum CliCommand {
         /// Requires `url` to be set; ignored when `url` is absent.
         #[serde(default)]
         strip_credentials: bool,
+        /// If `true`, the new tab is created in the background and the currently active tab
+        /// in the window remains active.
+        #[serde(default)]
+        background: bool,
     },
     /// Activate a tab, making it the focused tab in its window.
     ActivateTab {
