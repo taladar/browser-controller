@@ -701,12 +701,17 @@ async function cmdMoveTab(tabId, newIndex) {
 /**
  * Recover the titlePreface from a populated window object.
  *
- * Firefox window titles have the form:
+ * Firefox window titles normally have the form:
  *   {titlePreface}{activeTab.title}[{browserSuffix}]
+ *
+ * However, Firefox sometimes omits the tab title from the window title entirely
+ * (e.g. a newly opened window whose active tab is blank). In that case the title
+ * has the form:
+ *   {titlePreface}{browserSuffix}   — or just {titlePreface}
  *
  * Since titlePreface is write-only in the API (not returned by windows.getAll),
  * we extract it by finding where the active tab's title ends in the window title.
- * Three strategies are tried in order, from most to least anchored:
+ * Four strategies are tried in order, from most to least anchored:
  *
  * 1. endsWith(tabTitle + browserSuffix) — most precise; rules out false matches
  *    where the tab title also appears inside the prefix.
@@ -714,6 +719,8 @@ async function cmdMoveTab(tabId, newIndex) {
  *    browser suffix (the Firefox extension API may strip it).
  * 3. lastIndexOf(tabTitle) — last resort for unusual title formats; the rightmost
  *    occurrence is almost always the real tab title, not something in the prefix.
+ * 4. endsWith(browserSuffix) — used when the tab title is absent from the window
+ *    title altogether; strips the suffix to recover the bare prefix.
  *
  * Returns null when no prefix is present or it cannot be determined.
  *
@@ -724,28 +731,38 @@ function extractTitlePreface(win) {
   if (!isFirefox) return null;
   const activeTab = (win.tabs ?? []).find((t) => t.active);
   const tabTitle = activeTab?.title;
-  if (!tabTitle || !win.title) {
-    return null;
-  }
+  if (!win.title) return null;
 
-  // Strategy 1: anchored to browser suffix (e.g. " — Firefox").
-  if (windowTitleSuffix) {
-    const needle = tabTitle + windowTitleSuffix;
-    if (win.title.endsWith(needle)) {
-      const len = win.title.length - needle.length;
+  if (tabTitle) {
+    // Strategy 1: anchored to browser suffix (e.g. " — Firefox").
+    if (windowTitleSuffix) {
+      const needle = tabTitle + windowTitleSuffix;
+      if (win.title.endsWith(needle)) {
+        const len = win.title.length - needle.length;
+        return len > 0 ? win.title.substring(0, len) : null;
+      }
+    }
+
+    // Strategy 2: win.title ends directly with the tab title (no browser suffix).
+    if (win.title.endsWith(tabTitle)) {
+      const len = win.title.length - tabTitle.length;
       return len > 0 ? win.title.substring(0, len) : null;
     }
+
+    // Strategy 3: rightmost occurrence of the tab title anywhere in win.title.
+    const idx = win.title.lastIndexOf(tabTitle);
+    if (idx > 0) return win.title.substring(0, idx);
   }
 
-  // Strategy 2: win.title ends directly with the tab title (no browser suffix).
-  if (win.title.endsWith(tabTitle)) {
-    const len = win.title.length - tabTitle.length;
+  // Strategy 4: Firefox omitted the tab title from the window title entirely
+  // (e.g. new window with a blank tab). Strip the browser suffix if known to
+  // recover the bare prefix.
+  if (windowTitleSuffix && win.title.endsWith(windowTitleSuffix)) {
+    const len = win.title.length - windowTitleSuffix.length;
     return len > 0 ? win.title.substring(0, len) : null;
   }
 
-  // Strategy 3: rightmost occurrence of the tab title anywhere in win.title.
-  const idx = win.title.lastIndexOf(tabTitle);
-  return idx > 0 ? win.title.substring(0, idx) : null;
+  return null;
 }
 
 /**
