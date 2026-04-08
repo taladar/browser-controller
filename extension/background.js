@@ -393,7 +393,10 @@ async function cmdGetBrowserInfo() {
 
 /** Returns a Windows-shaped CliResult with tab summaries. */
 async function cmdListWindows() {
-  const windows = await browser.windows.getAll({ populate: true });
+  const [windows, lastFocused] = await Promise.all([
+    browser.windows.getAll({ populate: true }),
+    browser.windows.getLastFocused(),
+  ]);
 
   // Self-calibrate windowTitleSuffix from any window that has no prefix:
   // if win.title starts with the active tab's title, the remainder is the suffix.
@@ -410,7 +413,7 @@ async function cmdListWindows() {
 
   return {
     type: "Windows",
-    windows: windows.map(serializeWindowSummary),
+    windows: windows.map((win) => serializeWindowSummary(win, lastFocused.id)),
   };
 }
 
@@ -769,14 +772,16 @@ function extractTitlePreface(win) {
  * Serialize a browser `windows.Window` object to a `WindowSummary`.
  *
  * @param {browser.windows.Window} win
+ * @param {number} lastFocusedId - ID of the most recently focused window.
  * @returns {object}
  */
-function serializeWindowSummary(win) {
+function serializeWindowSummary(win, lastFocusedId) {
   return {
     id: win.id,
     title: win.title ?? "",
     title_prefix: extractTitlePreface(win),
     is_focused: win.focused,
+    is_last_focused: win.id === lastFocusedId,
     state: win.state ?? "normal",
     tabs: (win.tabs ?? []).map(serializeTabSummary),
   };

@@ -68,6 +68,13 @@ pub struct WindowSummary {
     pub title_prefix: Option<String>,
     /// Whether this window currently has input focus.
     pub is_focused: bool,
+    /// Whether this is the most recently focused window.
+    ///
+    /// This differs from `is_focused` when no window currently has OS-level focus
+    /// (e.g. all browser windows are on an inactive Wayland workspace). Firefox tracks
+    /// last-focused state internally and uses it as the fallback target when creating
+    /// a tab without a specific window.
+    pub is_last_focused: bool,
     /// The current visual state of the window.
     pub state: WindowState,
     /// Brief summaries of the tabs open in this window.

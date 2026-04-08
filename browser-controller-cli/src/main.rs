@@ -881,7 +881,13 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
                     .as_deref()
                     .map(|p| format!(" (prefix: {p:?})"))
                     .unwrap_or_default();
-                let focused = if win.is_focused { ", focused" } else { "" };
+                let focused = if win.is_focused {
+                    ", focused"
+                } else if win.is_last_focused {
+                    ", last-focused"
+                } else {
+                    ""
+                };
                 println!(
                     "Window {} — {:?}{}{} [{}]",
                     win.id, win.title, prefix_display, focused, win.state,
