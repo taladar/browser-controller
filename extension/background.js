@@ -790,6 +790,7 @@ function serializeWindowSummary(win) {
  */
 function serializeTabSummary(tab) {
   return {
+    id: tab.id,
     index: tab.index,
     title: tab.title ?? "",
     url: tab.url ?? "",

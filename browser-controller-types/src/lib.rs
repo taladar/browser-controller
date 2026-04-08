@@ -45,6 +45,8 @@ pub enum WindowState {
 /// A brief summary of a tab, suitable for embedding in window listings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabSummary {
+    /// The browser-assigned tab ID.
+    pub id: u32,
     /// Zero-based position of the tab within its window.
     pub index: u32,
     /// The tab's title.

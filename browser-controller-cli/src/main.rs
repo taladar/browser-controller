@@ -888,7 +888,10 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
                 );
                 for tab in &win.tabs {
                     let active = if tab.is_active { "*" } else { " " };
-                    println!("  {active}{:<4} {} — {}", tab.index, tab.title, tab.url);
+                    println!(
+                        "  {active}{:<4} [{}] {} — {}",
+                        tab.index, tab.id, tab.title, tab.url
+                    );
                 }
             }
         }
