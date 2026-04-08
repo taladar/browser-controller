@@ -490,6 +490,23 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, st
   }
   let tab = await browser.tabs.create(createProps);
 
+  // On Wayland, the compositor may block Firefox's attempt to activate the target
+  // window during tabs.create, causing Firefox to fall back to the active window.
+  // Detect this and move the tab to the correct window; tabs.move is a pure
+  // internal operation that does not require compositor activation.
+  if (tab.windowId !== windowId) {
+    let moveIndex = -1;
+    if (insertBeforeTabId !== null) {
+      const refTab = await browser.tabs.get(insertBeforeTabId);
+      moveIndex = refTab.index;
+    } else if (insertAfterTabId !== null) {
+      const refTab = await browser.tabs.get(insertAfterTabId);
+      moveIndex = refTab.index + 1;
+    }
+    const moved = await browser.tabs.move(tab.id, { windowId, index: moveIndex });
+    tab = Array.isArray(moved) ? moved[0] : moved;
+  }
+
   if (stripCredentials && url !== null) {
     const parsed = new URL(url);
     if (parsed.username !== "" || parsed.password !== "") {
