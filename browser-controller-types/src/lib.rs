@@ -255,7 +255,14 @@ pub enum CliCommand {
     /// List all open windows with their tab summaries.
     ListWindows,
     /// Open a new browser window.
-    OpenWindow,
+    OpenWindow {
+        /// Optional title prefix (Firefox `titlePreface`) to set on the new window.
+        ///
+        /// When set, the extension calls `browser.windows.update` immediately after
+        /// creation with `{ titlePreface: title_prefix }`.
+        #[serde(default)]
+        title_prefix: Option<String>,
+    },
     /// Close an existing browser window.
     CloseWindow {
         /// The ID of the window to close.

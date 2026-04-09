@@ -718,7 +718,17 @@ pub enum WindowsCommand {
     /// List all open windows with their tabs.
     List,
     /// Open a new browser window.
-    Open,
+    Open {
+        /// Title prefix (Firefox `titlePreface`) to set on the new window immediately after opening.
+        #[clap(long)]
+        title_prefix: Option<String>,
+        /// Only open the window if no existing window already has the title prefix given by `--title-prefix`.
+        ///
+        /// If a window with that title prefix already exists the command succeeds silently
+        /// without opening a new window. Requires `--title-prefix`.
+        #[clap(long, requires = "title_prefix")]
+        if_title_prefix_does_not_exist: bool,
+    },
     /// Close one or more browser windows.
     Close {
         /// Criteria selecting the window(s) to close.
@@ -783,6 +793,14 @@ pub enum TabsCommand {
         /// Open the new tab in the background, keeping the currently active tab focused.
         #[clap(long)]
         background: bool,
+        /// Only open the tab if no existing tab in any window has a URL matching `--url`.
+        ///
+        /// The comparison strips `user:password@` credentials from both sides before comparing,
+        /// so a tab previously opened with `--strip-credentials` is still considered a match.
+        /// If a matching tab already exists the command succeeds silently without opening a new tab.
+        /// Requires `--url`.
+        #[clap(long, requires = "url")]
+        if_url_does_not_exist: bool,
     },
     /// Activate a tab, making it the focused tab in its window.
     Activate {
@@ -1845,6 +1863,28 @@ async fn stream_events(socket_path: &std::path::Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// Return `url_str` with any embedded `user:password@` credentials removed.
+///
+/// Used to normalize URLs before comparing them, so that a tab opened with
+/// `--strip-credentials` still matches a check against the credential-free URL.
+/// Falls back to the original string unchanged if parsing fails (e.g. non-HTTP URLs).
+#[must_use]
+fn strip_url_credentials(url_str: &str) -> String {
+    if let Ok(mut u) = url::Url::parse(url_str) {
+        // set_username/set_password only fail on cannot-be-a-base URLs (e.g. data:),
+        // which cannot carry credentials; the Err(()) is safe to ignore.
+        match u.set_username("") {
+            Ok(()) | Err(()) => {}
+        }
+        match u.set_password(None) {
+            Ok(()) | Err(()) => {}
+        }
+        u.to_string()
+    } else {
+        url_str.to_owned()
+    }
+}
+
 /// Main application logic.
 ///
 /// # Errors
@@ -1913,8 +1953,31 @@ async fn do_stuff() -> Result<(), Error> {
                 let result = send_command(&instance.socket_path, CliCommand::ListWindows).await?;
                 print_result(&result, cli.output)?;
             }
-            WindowsCommand::Open => {
-                let result = send_command(&instance.socket_path, CliCommand::OpenWindow).await?;
+            WindowsCommand::Open {
+                title_prefix,
+                if_title_prefix_does_not_exist,
+            } => {
+                // Guard: skip opening if a window with the required prefix already exists.
+                if if_title_prefix_does_not_exist && let Some(ref required_prefix) = title_prefix {
+                    let list_result =
+                        send_command(&instance.socket_path, CliCommand::ListWindows).await?;
+                    let CliResult::Windows { windows } = list_result else {
+                        return Err(Error::CommandFailed(format!(
+                            "unexpected response to ListWindows: {list_result:?}"
+                        )));
+                    };
+                    if windows
+                        .iter()
+                        .any(|w| w.title_prefix.as_deref() == Some(required_prefix.as_str()))
+                    {
+                        return Ok(());
+                    }
+                }
+                let result = send_command(
+                    &instance.socket_path,
+                    CliCommand::OpenWindow { title_prefix },
+                )
+                .await?;
                 print_result(&result, cli.output)?;
             }
             WindowsCommand::Close { window } => {
@@ -1969,7 +2032,26 @@ async fn do_stuff() -> Result<(), Error> {
                 url,
                 strip_credentials,
                 background,
+                if_url_does_not_exist,
             } => {
+                // Guard: skip opening if a tab with the given URL already exists anywhere.
+                if if_url_does_not_exist && let Some(ref check_url) = url {
+                    let list_result =
+                        send_command(&instance.socket_path, CliCommand::ListWindows).await?;
+                    let CliResult::Windows { windows } = list_result else {
+                        return Err(Error::CommandFailed(format!(
+                            "unexpected response to ListWindows: {list_result:?}"
+                        )));
+                    };
+                    let normalized = strip_url_credentials(check_url);
+                    let already_exists = windows
+                        .iter()
+                        .flat_map(|w| &w.tabs)
+                        .any(|t| strip_url_credentials(&t.url) == normalized);
+                    if already_exists {
+                        return Ok(());
+                    }
+                }
                 let window_ids = resolve_windows(&instance.socket_path, &window).await?;
                 for window_id in window_ids {
                     let result = send_command(

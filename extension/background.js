@@ -329,7 +329,7 @@ async function dispatch(commandType, params) {
     case "ListWindows":
       return cmdListWindows();
     case "OpenWindow":
-      return cmdOpenWindow();
+      return cmdOpenWindow(params.title_prefix ?? null);
     case "CloseWindow":
       return cmdCloseWindow(params.window_id);
     case "SetWindowTitlePrefix":
@@ -417,9 +417,14 @@ async function cmdListWindows() {
   };
 }
 
-/** Opens a new browser window and returns its ID. */
-async function cmdOpenWindow() {
+/** Opens a new browser window and returns its ID.
+ * @param {string|null} titlePrefix - Optional title prefix to set via `titlePreface`.
+ */
+async function cmdOpenWindow(titlePrefix) {
   const win = await browser.windows.create({});
+  if (titlePrefix !== null) {
+    await browser.windows.update(win.id, { titlePreface: titlePrefix });
+  }
   return { type: "WindowId", window_id: win.id };
 }
 
