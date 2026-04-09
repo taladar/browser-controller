@@ -422,7 +422,7 @@ async function cmdListWindows() {
  */
 async function cmdOpenWindow(titlePrefix) {
   const win = await browser.windows.create({});
-  if (titlePrefix !== null) {
+  if (isFirefox && titlePrefix !== null) {
     await browser.windows.update(win.id, { titlePreface: titlePrefix });
   }
   return { type: "WindowId", window_id: win.id };
