@@ -10,17 +10,31 @@ version="$(jq -r '.version' "${EXTENSION_DIR}/manifest.json")"
 
 mkdir -p "${DIST_DIR}"
 
-# Collect all files to package (everything in the extension directory).
-mapfile -t files < <(find "${EXTENSION_DIR}" -maxdepth 1 -type f -printf '%f\n' | sort)
+# Collect all files except browser-specific manifest variants; manifest.json
+# (the Firefox manifest) is included via the tmpdir copy below.
+mapfile -t common_files < <(find "${EXTENSION_DIR}" -maxdepth 1 -type f -printf '%f\n' | grep -v '^manifest\.' | sort)
 
-echo "Packaging extension version ${version} with files: ${files[*]}"
+echo "Packaging extension version ${version} with files: ${common_files[*]}"
 
-# Firefox: .xpi is a zip with a different extension.
+tmpdir=$(mktemp -d)
+trap 'rm -rf "${tmpdir}"' EXIT
+
+# Copy common files into the staging directory.
+for f in "${common_files[@]}"; do
+  cp "${EXTENSION_DIR}/${f}" "${tmpdir}/${f}"
+done
+
+# Firefox: manifest.json already contains the Firefox-specific settings
+# (titlePreface / sessions support, browser_specific_settings/gecko).
+# .xpi is a zip file with a different extension.
+cp "${EXTENSION_DIR}/manifest.json" "${tmpdir}/manifest.json"
 xpi_path="${DIST_DIR}/browser-controller-${version}.xpi"
-(cd "${EXTENSION_DIR}" && zip -q -r "${xpi_path}" "${files[@]}")
+(cd "${tmpdir}" && zip -q -r "${xpi_path}" .)
 echo "Firefox: ${xpi_path}"
 
-# Chrome/Chromium/Edge/Brave: plain .zip.
+# Chrome/Chromium/Edge/Brave: use manifest.chrome.json which omits the
+# sessions permission (unused on Chrome, as titlePreface is Firefox-only).
+cp "${EXTENSION_DIR}/manifest.chrome.json" "${tmpdir}/manifest.json"
 zip_path="${DIST_DIR}/browser-controller-${version}.zip"
-(cd "${EXTENSION_DIR}" && zip -q -r "${zip_path}" "${files[@]}")
+(cd "${tmpdir}" && zip -q -r "${zip_path}" .)
 echo "Chrome:  ${zip_path}"
