@@ -147,8 +147,8 @@ async fn navigate_tab_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     };
 
-    // Navigate to example.com (a stable, always-available test URL)
-    let target_url = "https://example.com/";
+    // Navigate to Google (reliably available)
+    let target_url = "https://www.google.com/";
     h.send_command(CliCommand::NavigateTab {
         tab_id,
         url: target_url.to_owned(),
@@ -171,8 +171,8 @@ async fn navigate_tab_body(h: &Harness) {
             assert!(tab.is_some(), "tab {tab_id} should still exist");
             let tab = tab.expect("just asserted it exists");
             assert!(
-                tab.url.starts_with("https://example.com"),
-                "tab URL should start with https://example.com after NavigateTab, got {}",
+                tab.url.starts_with("https://www.google.com"),
+                "tab URL should start with https://www.google.com after NavigateTab, got {}",
                 tab.url,
             );
         }
