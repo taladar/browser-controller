@@ -413,7 +413,9 @@ async function cmdListWindows() {
 
   return {
     type: "Windows",
-    windows: windows.map((win) => serializeWindowSummary(win, lastFocused.id)),
+    windows: await Promise.all(
+      windows.map((win) => serializeWindowSummary(win, lastFocused.id)),
+    ),
   };
 }
 
@@ -776,15 +778,27 @@ function extractTitlePreface(win) {
 /**
  * Serialize a browser `windows.Window` object to a `WindowSummary`.
  *
+ * On Firefox, the stored titlePreface value from sessions storage is preferred
+ * over extractTitlePreface() because Firefox may strip trailing whitespace from
+ * the titlePreface when composing the window title, making extraction lossy.
+ *
  * @param {browser.windows.Window} win
  * @param {number} lastFocusedId - ID of the most recently focused window.
- * @returns {object}
+ * @returns {Promise<object>}
  */
-function serializeWindowSummary(win, lastFocusedId) {
+async function serializeWindowSummary(win, lastFocusedId) {
+  // Prefer the stored prefix (exact value the user set) over extraction from
+  // the window title, which may lose trailing whitespace.
+  let titlePrefix = null;
+  if (isFirefox) {
+    const stored = await browser.sessions.getWindowValue(win.id, "titlePreface");
+    titlePrefix = stored !== undefined ? stored : extractTitlePreface(win);
+  }
+
   return {
     id: win.id,
     title: win.title ?? "",
-    title_prefix: extractTitlePreface(win),
+    title_prefix: titlePrefix,
     is_focused: win.focused,
     is_last_focused: win.id === lastFocusedId,
     state: win.state ?? "normal",
