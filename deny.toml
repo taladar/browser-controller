@@ -112,6 +112,8 @@ exceptions = [
     # Each entry is the crate and version constraint, and its specific allow
     # list
     #{ allow = ["Zlib"], crate = "adler32" },
+    # niri-ipc is GPL-3.0; only used in the unpublished integration test crate (also GPL-3.0)
+    { allow = ["GPL-3.0-or-later"], crate = "niri-ipc" },
 ]
 
 # Some crates don't have (easily) machine readable licensing information,
@@ -137,7 +139,7 @@ exceptions = [
 # published to private registries.
 # To see how to mark a crate as unpublished (to the official registry),
 # visit https://doc.rust-lang.org/cargo/reference/manifest.html#the-publish-field.
-ignore = false
+ignore = true
 # One or more private registries that you might publish crates to, if a crate
 # is only published to private registries, and ignore is true, the crate will
 # not have its license(s) checked

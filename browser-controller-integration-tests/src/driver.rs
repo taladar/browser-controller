@@ -1,0 +1,118 @@
+//! WebDriver process lifecycle management.
+//!
+//! Launches geckodriver or chromedriver on a free port and waits for it to accept
+//! connections before returning.
+
+use std::net::TcpListener;
+use std::time::Duration;
+
+use tokio::net::TcpStream;
+use tokio::process::{Child, Command};
+use tokio::time::sleep;
+
+use crate::browser;
+
+/// Error type for driver operations.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// The WebDriver binary was not found on `$PATH`.
+    #[error("{0} not found on $PATH; install it to run integration tests")]
+    NotFound(String),
+    /// Failed to start the WebDriver process.
+    #[error("failed to start {0}: {1}")]
+    StartFailed(String, std::io::Error),
+    /// The driver did not accept connections within the timeout.
+    #[error("{0} did not become ready within {1:?}")]
+    Timeout(String, Duration),
+}
+
+/// A running WebDriver process.
+#[derive(Debug)]
+pub struct Process {
+    /// The child process handle.
+    pub child: Child,
+    /// The port the driver is listening on.
+    pub port: u16,
+    /// Which browser this driver is for.
+    pub browser: browser::Kind,
+}
+
+impl Process {
+    /// Start geckodriver or chromedriver on a free port.
+    ///
+    /// Blocks until the driver is accepting TCP connections or the timeout expires.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the driver binary is not found, fails to start, or does
+    /// not become ready within the timeout.
+    pub async fn start(browser: browser::Kind) -> Result<Self, Error> {
+        let binary = browser.driver_binary_name();
+
+        // Verify the binary exists
+        which::which(binary).map_err(|_e| Error::NotFound(binary.to_owned()))?;
+
+        let port = find_free_port();
+
+        let child = Command::new(binary)
+            .arg("--port")
+            .arg(port.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| Error::StartFailed(binary.to_owned(), e))?;
+
+        let timeout = Duration::from_secs(10);
+        wait_for_port(port, timeout)
+            .await
+            .map_err(|()| Error::Timeout(binary.to_owned(), timeout))?;
+
+        Ok(Self {
+            child,
+            port,
+            browser,
+        })
+    }
+}
+
+/// Find a free TCP port by binding to port 0 and reading the assigned port.
+///
+/// # Panics
+///
+/// Panics if binding to port 0 fails (should not happen on a healthy system).
+fn find_free_port() -> u16 {
+    #[expect(
+        clippy::expect_used,
+        reason = "binding to port 0 should always succeed"
+    )]
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .expect("binding to port 0 should always succeed on localhost");
+    #[expect(
+        clippy::expect_used,
+        reason = "bound listener always has a local address"
+    )]
+    let port = listener
+        .local_addr()
+        .expect("bound listener should have a local address")
+        .port();
+    port
+}
+
+/// Poll until a TCP connection to `127.0.0.1:port` succeeds, or the timeout expires.
+async fn wait_for_port(port: u16, timeout: Duration) -> Result<(), ()> {
+    let deadline = tokio::time::Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(tokio::time::Instant::now);
+    let poll_interval = Duration::from_millis(100);
+
+    loop {
+        if TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(());
+        }
+        sleep(poll_interval).await;
+    }
+}

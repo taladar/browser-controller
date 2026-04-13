@@ -1,5 +1,5 @@
 [workspace]
-members = ["browser-controller-cli", "browser-controller-mediator", "browser-controller-types"]
+members = ["browser-controller-cli", "browser-controller-integration-tests", "browser-controller-mediator", "browser-controller-types"]
 resolver = "3"
 
 [workspace.package]

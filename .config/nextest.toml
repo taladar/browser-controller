@@ -1,0 +1,8 @@
+[test-groups.integration-tests]
+# Integration tests start a real browser instance and share global state
+# (display, native messaging manifest), so they must run sequentially.
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = 'package(browser-controller-integration-tests)'
+test-group = 'integration-tests'
