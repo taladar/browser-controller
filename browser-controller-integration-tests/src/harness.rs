@@ -19,7 +19,7 @@ use crate::browser;
 use crate::cli;
 use crate::driver;
 use crate::mediator;
-use crate::profile::{self, TestProfile};
+use crate::profile::{self, PreparedExtension, TestProfile};
 
 /// Error type for harness operations.
 #[derive(Debug, thiserror::Error)]
@@ -70,6 +70,8 @@ pub struct Harness {
     pub browser_pid: Option<u32>,
     /// The test profile directory (dropped on cleanup).
     _profile: TestProfile,
+    /// The prepared extension directory (may be a temp copy for Chrome).
+    _extension: PreparedExtension,
 }
 
 impl Harness {
@@ -94,8 +96,8 @@ impl Harness {
             return Err(Error::ManifestMissing(missing));
         }
 
-        // 2. Locate the extension
-        let ext_dir = profile::verified_extension_dir().ok_or(Error::ExtensionNotFound)?;
+        // 2. Prepare the extension for this browser
+        let ext = profile::prepared_extension_dir(browser)?;
 
         // 3. Create temp profile
         let test_profile = TestProfile::new(browser)?;
@@ -109,7 +111,7 @@ impl Harness {
 
         // 6. Create BiDi session and install extension
         let mut session = bidi::create_session(browser, driver.port, &test_profile.path).await?;
-        let _extension_id = bidi::install_extension(&mut session, &ext_dir).await?;
+        let _extension_id = bidi::install_extension(&mut session, &ext.path).await?;
 
         // 7. Wait for new mediator socket
         let mediator_socket =
@@ -125,6 +127,7 @@ impl Harness {
             mediator_socket,
             browser_pid,
             _profile: test_profile,
+            _extension: ext,
         })
     }
 

@@ -125,3 +125,56 @@ pub fn verified_extension_dir() -> Option<PathBuf> {
     }
     Some(dir)
 }
+
+/// A prepared extension directory ready for installation into a specific browser.
+///
+/// For Firefox, this points directly to the workspace `extension/` directory.
+/// For Chrome, this is a temporary copy with `manifest.chrome.json` renamed to
+/// `manifest.json` (since Chrome cannot use the Firefox manifest which contains
+/// `browser_specific_settings.gecko` and the `sessions` permission).
+#[derive(Debug)]
+pub struct PreparedExtension {
+    /// Path to the extension directory to install.
+    pub path: PathBuf,
+    /// Temporary directory holding the Chrome copy (kept alive by this field).
+    _temp_dir: Option<tempfile::TempDir>,
+}
+
+/// Prepare the extension directory for the given browser.
+///
+/// # Errors
+///
+/// Returns an error if the extension source directory is missing or if the
+/// temporary copy for Chrome cannot be created.
+pub fn prepared_extension_dir(browser: browser::Kind) -> Result<PreparedExtension, std::io::Error> {
+    let source_dir = extension_dir().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "extension directory not found",
+        )
+    })?;
+
+    match browser {
+        browser::Kind::Firefox => Ok(PreparedExtension {
+            path: source_dir,
+            _temp_dir: None,
+        }),
+        browser::Kind::Chrome => {
+            let temp_dir = tempfile::TempDir::with_prefix("browser-controller-ext-chrome-")?;
+            let dest = temp_dir.path();
+
+            // Copy background.js
+            fs_err::copy(source_dir.join("background.js"), dest.join("background.js"))?;
+            // Copy manifest.chrome.json as manifest.json
+            fs_err::copy(
+                source_dir.join("manifest.chrome.json"),
+                dest.join("manifest.json"),
+            )?;
+
+            Ok(PreparedExtension {
+                path: dest.to_owned(),
+                _temp_dir: Some(temp_dir),
+            })
+        }
+    }
+}

@@ -9,124 +9,146 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
+use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
 use browser_controller_types::{CliCommand, CliResult};
 
-#[tokio::test]
+/// Shared list-windows test body.
 #[expect(
     clippy::panic,
     reason = "test assertions use panic on unexpected variants"
 )]
-async fn list_windows_firefox() {
-    harness::run(browser::Kind::Firefox, |h| {
-        Box::pin(async move {
-            let result = h
-                .send_command(CliCommand::ListWindows)
-                .await
-                .expect("ListWindows should succeed");
+async fn list_windows_body(h: &Harness) {
+    let result = h
+        .send_command(CliCommand::ListWindows)
+        .await
+        .expect("ListWindows should succeed");
 
-            match result {
-                CliResult::Windows { windows } => {
-                    assert!(!windows.is_empty(), "should have at least 1 window");
-                    for window in &windows {
-                        assert!(
-                            !window.tabs.is_empty(),
-                            "window {} should have at least 1 tab",
-                            window.id,
-                        );
-                    }
-                }
-                other => panic!("expected Windows, got {other:?}"),
-            }
-        })
-    })
-    .await;
-}
-
-#[tokio::test]
-#[expect(
-    clippy::panic,
-    reason = "test assertions use panic on unexpected variants"
-)]
-async fn open_close_window_firefox() {
-    harness::run(browser::Kind::Firefox, |h| {
-        Box::pin(async move {
-            // Get initial window count
-            let initial = h
-                .send_command(CliCommand::ListWindows)
-                .await
-                .expect("initial ListWindows should succeed");
-            let initial_count = match &initial {
-                CliResult::Windows { windows } => windows.len(),
-                other => panic!("expected Windows, got {other:?}"),
-            };
-
-            // Open a new window
-            let open_result = h
-                .send_command(CliCommand::OpenWindow { title_prefix: None })
-                .await
-                .expect("OpenWindow should succeed");
-            let new_window_id = match open_result {
-                CliResult::WindowId { window_id } => window_id,
-                other => panic!("expected WindowId, got {other:?}"),
-            };
-
-            // Verify count increased
-            let after_open = h
-                .send_command(CliCommand::ListWindows)
-                .await
-                .expect("ListWindows after open should succeed");
-            match &after_open {
-                CliResult::Windows { windows } => {
-                    pretty_assertions::assert_eq!(
-                        windows.len(),
-                        initial_count + 1,
-                        "window count should increase by 1 after OpenWindow",
-                    );
-                }
-                other => panic!("expected Windows, got {other:?}"),
-            }
-
-            // If niri is available, verify new window appears
-            if browser_controller_integration_tests::niri::is_available()
-                && let Some(pid) = h.browser_pid
-            {
-                let count = browser_controller_integration_tests::niri::count_windows_for_pid(pid)
-                    .expect("niri window count should succeed");
+    match result {
+        CliResult::Windows { windows } => {
+            assert!(!windows.is_empty(), "should have at least 1 window");
+            for window in &windows {
                 assert!(
-                    count > initial_count,
-                    "niri should see more than {initial_count} windows for PID {pid}, got {count}",
+                    !window.tabs.is_empty(),
+                    "window {} should have at least 1 tab",
+                    window.id,
                 );
             }
+        }
+        other => panic!("expected Windows, got {other:?}"),
+    }
+}
 
-            // Close the new window
-            h.send_command(CliCommand::CloseWindow {
-                window_id: new_window_id,
-            })
-            .await
-            .expect("CloseWindow should succeed");
+#[tokio::test]
+async fn list_windows_firefox() {
+    harness::run(browser::Kind::Firefox, |h| Box::pin(list_windows_body(h))).await;
+}
 
-            // Verify count restored
-            let after_close = h
-                .send_command(CliCommand::ListWindows)
-                .await
-                .expect("ListWindows after close should succeed");
-            match &after_close {
-                CliResult::Windows { windows } => {
-                    pretty_assertions::assert_eq!(
-                        windows.len(),
-                        initial_count,
-                        "window count should return to initial after CloseWindow",
-                    );
-                }
-                other => panic!("expected Windows, got {other:?}"),
-            }
-        })
+#[tokio::test]
+async fn list_windows_chrome() {
+    harness::run(browser::Kind::Chrome, |h| Box::pin(list_windows_body(h))).await;
+}
+
+/// Shared open/close window test body.
+#[expect(
+    clippy::panic,
+    reason = "test assertions use panic on unexpected variants"
+)]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "window count arithmetic in test assertions cannot overflow in practice"
+)]
+async fn open_close_window_body(h: &Harness) {
+    // Get initial window count
+    let initial = h
+        .send_command(CliCommand::ListWindows)
+        .await
+        .expect("initial ListWindows should succeed");
+    let initial_count = match &initial {
+        CliResult::Windows { windows } => windows.len(),
+        other => panic!("expected Windows, got {other:?}"),
+    };
+
+    // Open a new window
+    let open_result = h
+        .send_command(CliCommand::OpenWindow { title_prefix: None })
+        .await
+        .expect("OpenWindow should succeed");
+    let new_window_id = match open_result {
+        CliResult::WindowId { window_id } => window_id,
+        other => panic!("expected WindowId, got {other:?}"),
+    };
+
+    // Verify count increased
+    let after_open = h
+        .send_command(CliCommand::ListWindows)
+        .await
+        .expect("ListWindows after open should succeed");
+    match &after_open {
+        CliResult::Windows { windows } => {
+            pretty_assertions::assert_eq!(
+                windows.len(),
+                initial_count + 1,
+                "window count should increase by 1 after OpenWindow",
+            );
+        }
+        other => panic!("expected Windows, got {other:?}"),
+    }
+
+    // If niri is available, verify new window appears
+    if browser_controller_integration_tests::niri::is_available()
+        && let Some(pid) = h.browser_pid
+    {
+        let count = browser_controller_integration_tests::niri::count_windows_for_pid(pid)
+            .expect("niri window count should succeed");
+        assert!(
+            count > initial_count,
+            "niri should see more than {initial_count} windows for PID {pid}, got {count}",
+        );
+    }
+
+    // Close the new window
+    h.send_command(CliCommand::CloseWindow {
+        window_id: new_window_id,
+    })
+    .await
+    .expect("CloseWindow should succeed");
+
+    // Verify count restored
+    let after_close = h
+        .send_command(CliCommand::ListWindows)
+        .await
+        .expect("ListWindows after close should succeed");
+    match &after_close {
+        CliResult::Windows { windows } => {
+            pretty_assertions::assert_eq!(
+                windows.len(),
+                initial_count,
+                "window count should return to initial after CloseWindow",
+            );
+        }
+        other => panic!("expected Windows, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn open_close_window_firefox() {
+    harness::run(browser::Kind::Firefox, |h| {
+        Box::pin(open_close_window_body(h))
     })
     .await;
 }
 
+#[tokio::test]
+async fn open_close_window_chrome() {
+    harness::run(browser::Kind::Chrome, |h| {
+        Box::pin(open_close_window_body(h))
+    })
+    .await;
+}
+
+/// Title prefix test — Firefox-only (Chrome does not support titlePreface).
 #[tokio::test]
 #[expect(
     clippy::panic,
