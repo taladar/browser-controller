@@ -675,11 +675,20 @@ pub enum Command {
     /// navigation, title change, active tab change) until interrupted.
     ///
     /// Multiple `event-stream` processes for the same browser instance are supported.
-    EventStream,
+    EventStream {
+        /// Only show download-related events.
+        #[clap(long)]
+        downloads: bool,
+        /// Only show window and tab events.
+        #[clap(long)]
+        windows_tabs: bool,
+    },
     /// Manage browser windows.
     Windows(WindowsArgs),
     /// Manage tabs within a browser window.
     Tabs(TabsArgs),
+    /// Manage downloads.
+    Downloads(DownloadsArgs),
     /// Generate a man page for this tool.
     GenerateManpage {
         /// Directory in which to write the generated man page.
@@ -972,6 +981,124 @@ pub enum TabsCommand {
             help = "Comma-separated list of domains to sort by"
         )]
         domains: Vec<String>,
+    },
+}
+
+/// CLI argument type for download state filtering.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadStateArg {
+    /// Downloads that are actively receiving data.
+    InProgress,
+    /// Downloads that completed successfully.
+    Complete,
+    /// Downloads that were interrupted.
+    Interrupted,
+}
+
+impl From<DownloadStateArg> for browser_controller_types::DownloadState {
+    fn from(arg: DownloadStateArg) -> Self {
+        match arg {
+            DownloadStateArg::InProgress => Self::InProgress,
+            DownloadStateArg::Complete => Self::Complete,
+            DownloadStateArg::Interrupted => Self::Interrupted,
+        }
+    }
+}
+
+/// CLI argument type for filename conflict handling.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilenameConflictActionArg {
+    /// Add a number to the filename to make it unique.
+    Uniquify,
+    /// Overwrite the existing file.
+    Overwrite,
+    /// Prompt the user.
+    Prompt,
+}
+
+impl From<FilenameConflictActionArg> for browser_controller_types::FilenameConflictAction {
+    fn from(arg: FilenameConflictActionArg) -> Self {
+        match arg {
+            FilenameConflictActionArg::Uniquify => Self::Uniquify,
+            FilenameConflictActionArg::Overwrite => Self::Overwrite,
+            FilenameConflictActionArg::Prompt => Self::Prompt,
+        }
+    }
+}
+
+/// Arguments for the `downloads` subcommand group.
+#[derive(clap::Args, Debug)]
+pub struct DownloadsArgs {
+    /// Download operation to perform.
+    #[clap(subcommand)]
+    command: DownloadsCommand,
+}
+
+/// Operations on downloads.
+#[derive(clap::Subcommand, Debug)]
+pub enum DownloadsCommand {
+    /// List downloads, optionally filtered by state.
+    List {
+        /// Filter by download state.
+        #[clap(long)]
+        state: Option<DownloadStateArg>,
+        /// Maximum number of results.
+        #[clap(long)]
+        limit: Option<u32>,
+        /// Free-text search query matching URL and filename.
+        #[clap(long)]
+        query: Option<String>,
+    },
+    /// Start a new download.
+    Start {
+        /// URL to download.
+        #[clap(long)]
+        url: String,
+        /// Filename relative to the downloads folder.
+        #[clap(long)]
+        filename: Option<String>,
+        /// Show the Save As dialog.
+        #[clap(long)]
+        save_as: bool,
+        /// How to handle filename conflicts.
+        #[clap(long)]
+        conflict_action: Option<FilenameConflictActionArg>,
+    },
+    /// Cancel an active download.
+    Cancel {
+        /// Download ID to cancel.
+        #[clap(long)]
+        id: u32,
+    },
+    /// Pause an active download.
+    Pause {
+        /// Download ID to pause.
+        #[clap(long)]
+        id: u32,
+    },
+    /// Resume a paused download.
+    Resume {
+        /// Download ID to resume.
+        #[clap(long)]
+        id: u32,
+    },
+    /// Retry an interrupted download by re-downloading from the same URL.
+    Retry {
+        /// Download ID to retry.
+        #[clap(long)]
+        id: u32,
+    },
+    /// Remove a download from the browser's history (the file stays on disk).
+    Erase {
+        /// Download ID to remove.
+        #[clap(long)]
+        id: u32,
+    },
+    /// Clear all downloads from history, optionally filtered by state.
+    Clear {
+        /// Only clear downloads in this state.
+        #[clap(long)]
+        state: Option<DownloadStateArg>,
     },
 }
 
@@ -1422,6 +1549,46 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
                 yn(tab.is_in_reader_mode),
                 yn(tab.incognito),
             );
+        }
+        CliResult::Downloads { downloads } => {
+            for dl in downloads {
+                let progress = if dl.total_bytes > 0 {
+                    format!("{}/{} bytes", dl.bytes_received, dl.total_bytes)
+                } else {
+                    format!("{} bytes", dl.bytes_received)
+                };
+                let error_info = dl
+                    .error
+                    .as_deref()
+                    .map(|e| format!(" error={e}"))
+                    .unwrap_or_default();
+                println!(
+                    "Download {} \u{2014} {} [{}]{}{}",
+                    dl.id,
+                    dl.state,
+                    progress,
+                    if dl.paused { " paused" } else { "" },
+                    error_info,
+                );
+                println!("  URL:      {}", dl.url);
+                println!("  File:     {}", dl.filename);
+                if let Some(ref mime) = dl.mime {
+                    println!("  MIME:     {mime}");
+                }
+                println!("  Started:  {}", dl.start_time);
+                if let Some(ref end) = dl.end_time {
+                    println!("  Ended:    {end}");
+                }
+                println!(
+                    "  Exists: {}  Can resume: {}  Incognito: {}",
+                    yn(dl.exists),
+                    yn(dl.can_resume),
+                    yn(dl.incognito),
+                );
+            }
+        }
+        CliResult::DownloadId { download_id } => {
+            println!("Download {download_id}");
         }
         CliResult::Unit => {}
     }
@@ -1896,7 +2063,14 @@ async fn resolve_tabs(
     clippy::print_stdout,
     reason = "event stream output goes to stdout by design"
 )]
-async fn stream_events(socket_path: &std::path::Path) -> Result<(), Error> {
+async fn stream_events(
+    socket_path: &std::path::Path,
+    filter_downloads: bool,
+    filter_windows_tabs: bool,
+) -> Result<(), Error> {
+    // When neither filter is set, show all events (backward compatible).
+    let show_all = !filter_downloads && !filter_windows_tabs;
+
     let request = CliRequest {
         request_id: uuid::Uuid::new_v4().to_string(),
         command: CliCommand::SubscribeEvents,
@@ -1928,9 +2102,22 @@ async fn stream_events(socket_path: &std::path::Path) -> Result<(), Error> {
             break; // Mediator closed the connection.
         }
         let trimmed = line.trim_end();
-        if !trimmed.is_empty() {
-            println!("{trimmed}");
+        if trimmed.is_empty() {
+            continue;
         }
+        // Apply event category filter if any flags are set.
+        if !show_all {
+            let is_download_event = trimmed.contains("\"DownloadCreated\"")
+                || trimmed.contains("\"DownloadChanged\"")
+                || trimmed.contains("\"DownloadErased\"");
+            if is_download_event && !filter_downloads {
+                continue;
+            }
+            if !is_download_event && !filter_windows_tabs {
+                continue;
+            }
+        }
+        println!("{trimmed}");
     }
     Ok(())
 }
@@ -2154,7 +2341,10 @@ async fn do_stuff() -> Result<(), Error> {
             load_temporary_extension(path, *port).await?;
             return Ok(());
         }
-        Command::Windows(_) | Command::Tabs(_) | Command::EventStream => {}
+        Command::Windows(_)
+        | Command::Tabs(_)
+        | Command::Downloads(_)
+        | Command::EventStream { .. } => {}
     }
 
     // Commands that require a browser connection.
@@ -2167,8 +2357,12 @@ async fn do_stuff() -> Result<(), Error> {
         "Selected browser instance",
     );
 
-    if matches!(cli.command, Command::EventStream) {
-        stream_events(&instance.socket_path).await?;
+    if let Command::EventStream {
+        downloads,
+        windows_tabs,
+    } = &cli.command
+    {
+        stream_events(&instance.socket_path, *downloads, *windows_tabs).await?;
         return Ok(());
     }
 
@@ -2546,9 +2740,95 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 }
             }
         },
+        Command::Downloads(d) => match d.command {
+            DownloadsCommand::List {
+                state,
+                limit,
+                query,
+            } => {
+                let result = send_command(
+                    &instance.socket_path,
+                    CliCommand::ListDownloads {
+                        state: state.map(Into::into),
+                        limit,
+                        query,
+                    },
+                )
+                .await?;
+                print_result(&result, cli.output)?;
+            }
+            DownloadsCommand::Start {
+                url,
+                filename,
+                save_as,
+                conflict_action,
+            } => {
+                let result = send_command(
+                    &instance.socket_path,
+                    CliCommand::StartDownload {
+                        url,
+                        filename,
+                        save_as,
+                        conflict_action: conflict_action.map(Into::into),
+                    },
+                )
+                .await?;
+                print_result(&result, cli.output)?;
+            }
+            DownloadsCommand::Cancel { id } => {
+                let result = send_command(
+                    &instance.socket_path,
+                    CliCommand::CancelDownload { download_id: id },
+                )
+                .await?;
+                print_result(&result, cli.output)?;
+            }
+            DownloadsCommand::Pause { id } => {
+                let result = send_command(
+                    &instance.socket_path,
+                    CliCommand::PauseDownload { download_id: id },
+                )
+                .await?;
+                print_result(&result, cli.output)?;
+            }
+            DownloadsCommand::Resume { id } => {
+                let result = send_command(
+                    &instance.socket_path,
+                    CliCommand::ResumeDownload { download_id: id },
+                )
+                .await?;
+                print_result(&result, cli.output)?;
+            }
+            DownloadsCommand::Retry { id } => {
+                let result = send_command(
+                    &instance.socket_path,
+                    CliCommand::RetryDownload { download_id: id },
+                )
+                .await?;
+                print_result(&result, cli.output)?;
+            }
+            DownloadsCommand::Erase { id } => {
+                let result = send_command(
+                    &instance.socket_path,
+                    CliCommand::EraseDownload { download_id: id },
+                )
+                .await?;
+                print_result(&result, cli.output)?;
+            }
+            DownloadsCommand::Clear { state } => {
+                let result = send_command(
+                    &instance.socket_path,
+                    CliCommand::EraseAllDownloads {
+                        state: state.map(Into::into),
+                    },
+                )
+                .await?;
+                print_result(&result, cli.output)?;
+            }
+        },
         // Already handled above.
         Command::Instances
-        | Command::EventStream
+        | Command::EventStream { .. }
         | Command::GenerateManpage { .. }
         | Command::GenerateShellCompletion { .. }
         | Command::InstallManifest { .. }

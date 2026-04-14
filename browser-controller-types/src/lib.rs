@@ -91,6 +91,92 @@ pub enum TabStatus {
     Complete,
 }
 
+/// The state of a download.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DownloadState {
+    /// The download is actively receiving data.
+    InProgress,
+    /// The download completed successfully.
+    Complete,
+    /// The download was interrupted (check `error` for the reason).
+    Interrupted,
+}
+
+impl std::fmt::Display for DownloadState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InProgress => write!(f, "in_progress"),
+            Self::Complete => write!(f, "complete"),
+            Self::Interrupted => write!(f, "interrupted"),
+        }
+    }
+}
+
+/// How to handle filename conflicts when downloading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilenameConflictAction {
+    /// Add a number to the filename to make it unique.
+    Uniquify,
+    /// Overwrite the existing file.
+    Overwrite,
+    /// Prompt the user.
+    Prompt,
+}
+
+impl std::fmt::Display for FilenameConflictAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Uniquify => write!(f, "uniquify"),
+            Self::Overwrite => write!(f, "overwrite"),
+            Self::Prompt => write!(f, "prompt"),
+        }
+    }
+}
+
+/// Details about a download.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "DownloadItem mirrors the browser's DownloadItem API, which exposes each state as a separate boolean property"
+)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadItem {
+    /// Browser-assigned download ID.
+    pub id: u32,
+    /// The URL that was downloaded.
+    pub url: String,
+    /// Absolute filesystem path where the file was saved.
+    pub filename: String,
+    /// Current state of the download.
+    pub state: DownloadState,
+    /// Bytes received so far.
+    pub bytes_received: u64,
+    /// Total file size in bytes, or -1 if unknown.
+    pub total_bytes: i64,
+    /// Final file size in bytes, or -1 if unknown.
+    pub file_size: i64,
+    /// Error reason if the download was interrupted.
+    #[serde(default)]
+    pub error: Option<String>,
+    /// ISO 8601 timestamp when the download started.
+    pub start_time: String,
+    /// ISO 8601 timestamp when the download ended.
+    #[serde(default)]
+    pub end_time: Option<String>,
+    /// Whether the download is paused.
+    pub paused: bool,
+    /// Whether an interrupted download can be resumed.
+    pub can_resume: bool,
+    /// Whether the downloaded file still exists on disk.
+    pub exists: bool,
+    /// MIME type of the downloaded file.
+    #[serde(default)]
+    pub mime: Option<String>,
+    /// Whether the download is associated with a private/incognito session.
+    pub incognito: bool,
+}
+
 /// Full details about a browser tab.
 #[expect(
     clippy::struct_excessive_bools,
@@ -243,6 +329,37 @@ pub enum BrowserEvent {
         window_id: u32,
         /// The new loading status.
         status: TabStatus,
+    },
+    /// A new download was started.
+    DownloadCreated {
+        /// The download's ID.
+        download_id: u32,
+        /// The URL being downloaded.
+        url: String,
+        /// The filename (may be empty until determined).
+        filename: String,
+        /// The MIME type, if known.
+        #[serde(default)]
+        mime: Option<String>,
+    },
+    /// A download's state or properties changed.
+    DownloadChanged {
+        /// The download's ID.
+        download_id: u32,
+        /// The new state, if it changed.
+        #[serde(default)]
+        state: Option<DownloadState>,
+        /// The new filename, if it changed.
+        #[serde(default)]
+        filename: Option<String>,
+        /// The error reason, if the download was interrupted.
+        #[serde(default)]
+        error: Option<String>,
+    },
+    /// A download was removed from the browser's history.
+    DownloadErased {
+        /// The download's ID.
+        download_id: u32,
     },
 }
 
@@ -410,6 +527,63 @@ pub enum CliCommand {
     /// newline-delimited JSON on the same connection until the client disconnects.
     /// No [`CliResponse`] is sent; events arrive directly as [`BrowserEvent`] JSON.
     SubscribeEvents,
+    /// List downloads, optionally filtered by state.
+    ListDownloads {
+        /// Filter by download state.
+        #[serde(default)]
+        state: Option<DownloadState>,
+        /// Maximum number of results to return.
+        #[serde(default)]
+        limit: Option<u32>,
+        /// Free-text search query matching URL and filename.
+        #[serde(default)]
+        query: Option<String>,
+    },
+    /// Start a new download.
+    StartDownload {
+        /// The URL to download.
+        url: String,
+        /// Filename relative to the downloads folder.
+        #[serde(default)]
+        filename: Option<String>,
+        /// If `true`, show the Save As dialog.
+        #[serde(default)]
+        save_as: bool,
+        /// How to handle filename conflicts.
+        #[serde(default)]
+        conflict_action: Option<FilenameConflictAction>,
+    },
+    /// Cancel an active download.
+    CancelDownload {
+        /// The download ID to cancel.
+        download_id: u32,
+    },
+    /// Pause an active download.
+    PauseDownload {
+        /// The download ID to pause.
+        download_id: u32,
+    },
+    /// Resume a paused download.
+    ResumeDownload {
+        /// The download ID to resume.
+        download_id: u32,
+    },
+    /// Retry an interrupted download by re-downloading from the same URL.
+    RetryDownload {
+        /// The download ID to retry.
+        download_id: u32,
+    },
+    /// Remove a download from the browser's download history (the file stays on disk).
+    EraseDownload {
+        /// The download ID to erase.
+        download_id: u32,
+    },
+    /// Clear all downloads from the browser's history, optionally filtered by state.
+    EraseAllDownloads {
+        /// Only erase downloads in this state.
+        #[serde(default)]
+        state: Option<DownloadState>,
+    },
 }
 
 /// A request sent from the CLI to the mediator.
@@ -448,6 +622,16 @@ pub enum CliResult {
     },
     /// Details of a newly created or moved tab.
     Tab(TabDetails),
+    /// Download list returned by `ListDownloads`.
+    Downloads {
+        /// The list of downloads.
+        downloads: Vec<DownloadItem>,
+    },
+    /// ID of a newly started download returned by `StartDownload`.
+    DownloadId {
+        /// The new download's ID.
+        download_id: u32,
+    },
     /// Returned by commands that have no meaningful output.
     Unit,
 }

@@ -82,6 +82,12 @@ impl Server {
     pub fn article_url(&self) -> String {
         format!("http://127.0.0.1:{}/article", self.port)
     }
+
+    /// Return the URL for a downloadable file with the given name.
+    #[must_use]
+    pub fn download_url(&self, filename: &str) -> String {
+        format!("http://127.0.0.1:{}/download/{filename}", self.port)
+    }
 }
 
 /// Find a free TCP port by binding to port 0.
@@ -160,6 +166,10 @@ async fn handle_connection(
         "/audio" => audio_response(),
         "/article" => article_response(),
         "/auth" => handle_auth(auth_credentials.as_deref(), authorization.as_deref()),
+        _ if path.starts_with("/download/") => {
+            let filename = path.strip_prefix("/download/").unwrap_or("file.bin");
+            download_response(filename)
+        }
         _ => not_found_response(),
     };
 
@@ -243,6 +253,24 @@ fn article_response() -> String {
         "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\
          Cache-Control: max-age=3600\r\nConnection: close\r\n\r\n{html}",
         html.len(),
+    )
+}
+
+/// Build a 200 OK response with a downloadable binary file.
+///
+/// Generates a small (1 KB) binary payload with a `Content-Disposition` header
+/// that suggests the given filename.
+fn download_response(filename: &str) -> String {
+    // Generate 1024 bytes of deterministic data
+    let body: Vec<u8> = (0..1024u16)
+        .map(|i| u8::try_from(i & 0xFF).unwrap_or(0))
+        .collect();
+    let body_str = String::from_utf8_lossy(&body);
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+         Content-Disposition: attachment; filename=\"{filename}\"\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body_str}",
+        body.len(),
     )
 }
 

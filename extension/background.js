@@ -212,6 +212,44 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 // ---------------------------------------------------------------------------
+// Download event forwarding
+// ---------------------------------------------------------------------------
+
+browser.downloads.onCreated.addListener((downloadItem) => {
+  pushEvent({
+    type: "DownloadCreated",
+    download_id: downloadItem.id,
+    url: downloadItem.url ?? "",
+    filename: downloadItem.filename ?? "",
+    mime: downloadItem.mime || null,
+  });
+});
+
+browser.downloads.onChanged.addListener((downloadDelta) => {
+  const event = {
+    type: "DownloadChanged",
+    download_id: downloadDelta.id,
+  };
+  if (downloadDelta.state) {
+    event.state = downloadDelta.state.current;
+  }
+  if (downloadDelta.filename) {
+    event.filename = downloadDelta.filename.current;
+  }
+  if (downloadDelta.error) {
+    event.error = downloadDelta.error.current;
+  }
+  pushEvent(event);
+});
+
+browser.downloads.onErased.addListener((downloadId) => {
+  pushEvent({
+    type: "DownloadErased",
+    download_id: downloadId,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Native messaging connection
 // ---------------------------------------------------------------------------
 
@@ -403,6 +441,22 @@ async function dispatch(commandType, params) {
       return cmdUnmuteTab(params.tab_id);
     case "MoveTab":
       return cmdMoveTab(params.tab_id, params.new_index);
+    case "ListDownloads":
+      return cmdListDownloads(params.state ?? null, params.limit ?? null, params.query ?? null);
+    case "StartDownload":
+      return cmdStartDownload(params.url, params.filename ?? null, params.save_as ?? false, params.conflict_action ?? null);
+    case "CancelDownload":
+      return cmdCancelDownload(params.download_id);
+    case "PauseDownload":
+      return cmdPauseDownload(params.download_id);
+    case "ResumeDownload":
+      return cmdResumeDownload(params.download_id);
+    case "RetryDownload":
+      return cmdRetryDownload(params.download_id);
+    case "EraseDownload":
+      return cmdEraseDownload(params.download_id);
+    case "EraseAllDownloads":
+      return cmdEraseAllDownloads(params.state ?? null);
     default:
       throw new Error(`Unknown command type: ${commandType}`);
   }
@@ -784,6 +838,110 @@ async function cmdActivateTab(tabId) {
 async function cmdMoveTab(tabId, newIndex) {
   const [moved] = await browser.tabs.move(tabId, { index: newIndex });
   return { type: "Tab", ...await serializeTabDetails(moved) };
+}
+
+// ---------------------------------------------------------------------------
+// Download command implementations
+// ---------------------------------------------------------------------------
+
+/** Serialize a browser DownloadItem to the wire format. */
+function serializeDownloadItem(item) {
+  return {
+    id: item.id,
+    url: item.url ?? "",
+    filename: item.filename ?? "",
+    state: item.state ?? "in_progress",
+    bytes_received: item.bytesReceived ?? 0,
+    total_bytes: item.totalBytes ?? -1,
+    file_size: item.fileSize ?? -1,
+    error: item.error || null,
+    start_time: item.startTime ?? "",
+    end_time: item.endTime || null,
+    paused: item.paused ?? false,
+    can_resume: item.canResume ?? false,
+    exists: item.exists ?? false,
+    mime: item.mime || null,
+    incognito: item.incognito ?? false,
+  };
+}
+
+/** List downloads, optionally filtered by state. */
+async function cmdListDownloads(state, limit, query) {
+  const searchQuery = {};
+  if (state !== null) {
+    searchQuery.state = state;
+  }
+  if (limit !== null) {
+    searchQuery.limit = limit;
+  }
+  if (query !== null) {
+    searchQuery.query = [query];
+  }
+  const items = await browser.downloads.search(searchQuery);
+  return {
+    type: "Downloads",
+    downloads: items.map(serializeDownloadItem),
+  };
+}
+
+/** Start a new download and return its ID. */
+async function cmdStartDownload(url, filename, saveAs, conflictAction) {
+  const opts = { url, saveAs };
+  if (filename !== null) {
+    opts.filename = filename;
+  }
+  if (conflictAction !== null) {
+    opts.conflictAction = conflictAction;
+  }
+  const downloadId = await browser.downloads.download(opts);
+  return { type: "DownloadId", download_id: downloadId };
+}
+
+/** Cancel an active download. */
+async function cmdCancelDownload(downloadId) {
+  await browser.downloads.cancel(downloadId);
+  return { type: "Unit" };
+}
+
+/** Pause an active download. */
+async function cmdPauseDownload(downloadId) {
+  await browser.downloads.pause(downloadId);
+  return { type: "Unit" };
+}
+
+/** Resume a paused download. */
+async function cmdResumeDownload(downloadId) {
+  await browser.downloads.resume(downloadId);
+  return { type: "Unit" };
+}
+
+/** Retry an interrupted download by re-downloading from the same URL. */
+async function cmdRetryDownload(downloadId) {
+  const [item] = await browser.downloads.search({ id: downloadId });
+  if (!item) {
+    throw new Error(`Download ${downloadId} not found`);
+  }
+  if (item.state !== "interrupted") {
+    throw new Error(`Download ${downloadId} is not interrupted (state: ${item.state})`);
+  }
+  const newId = await browser.downloads.download({ url: item.url });
+  return { type: "DownloadId", download_id: newId };
+}
+
+/** Remove a single download from the browser's history. */
+async function cmdEraseDownload(downloadId) {
+  await browser.downloads.erase({ id: downloadId });
+  return { type: "Unit" };
+}
+
+/** Clear all downloads from history, optionally filtered by state. */
+async function cmdEraseAllDownloads(state) {
+  const query = {};
+  if (state !== null) {
+    query.state = state;
+  }
+  await browser.downloads.erase(query);
+  return { type: "Unit" };
 }
 
 // ---------------------------------------------------------------------------

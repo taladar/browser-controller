@@ -12,6 +12,7 @@
   "permissions": [
     "nativeMessaging",
     "scripting",
+    "downloads",
     "tabs",
     "webRequest",
     "webRequestAuthProvider"

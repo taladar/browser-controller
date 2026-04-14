@@ -13,6 +13,7 @@
     "nativeMessaging",
     "scripting",
     "sessions",
+    "downloads",
     "tabs",
     "webRequest",
     "webRequestBlocking"
