@@ -2227,7 +2227,13 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 print_result(&result, cli.output)?;
             }
             WindowsCommand::Close { window } => {
-                let window_ids = resolve_windows(&instance.socket_path, &window).await?;
+                // Zero matches is not an error for close — the desired state
+                // (no matching windows exist) is already achieved.
+                let window_ids = match resolve_windows(&instance.socket_path, &window).await {
+                    Ok(ids) => ids,
+                    Err(Error::NoMatchingWindow { .. }) => Vec::new(),
+                    Err(e) => return Err(e),
+                };
                 for window_id in window_ids {
                     let result =
                         send_command(&instance.socket_path, CliCommand::CloseWindow { window_id })
@@ -2352,7 +2358,13 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 }
             }
             TabsCommand::Close { tab } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                // Zero matches is not an error for close — the desired state
+                // (no matching tabs exist) is already achieved.
+                let tab_ids = match resolve_tabs(&instance.socket_path, &tab).await {
+                    Ok(ids) => ids,
+                    Err(Error::NoMatchingTab { .. }) => Vec::new(),
+                    Err(e) => return Err(e),
+                };
                 for tab_id in tab_ids {
                     let result =
                         send_command(&instance.socket_path, CliCommand::CloseTab { tab_id })
