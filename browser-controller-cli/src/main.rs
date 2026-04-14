@@ -147,6 +147,12 @@ pub enum Error {
     /// A regular expression pattern supplied by the user could not be compiled.
     #[error("invalid regex: {0}")]
     InvalidRegex(#[from] regex::Error),
+
+    /// A command timed out waiting for a response.
+    #[error(
+        "command timed out after {0}s (the extension may have been reloaded or the page may not finish loading)"
+    )]
+    CommandTimeout(u64),
 }
 
 /// The native messaging protocol family, which determines the JSON manifest format.
@@ -647,6 +653,15 @@ struct Cli {
     /// If omitted and exactly one instance is running, it is selected automatically.
     #[clap(long, short = 'i', global = true)]
     instance: Option<String>,
+
+    /// Timeout in seconds for a command to complete.
+    ///
+    /// If the mediator or extension does not respond within this time (e.g. due
+    /// to an extension reload, crash, or a page that never finishes loading),
+    /// the command fails with an error instead of hanging indefinitely.
+    /// Set to 0 to disable the timeout.
+    #[clap(long, short = 't', default_value = "30", global = true)]
+    timeout: u64,
 }
 
 /// Available commands.
@@ -1955,6 +1970,23 @@ async fn do_stuff() -> Result<(), Error> {
         return Ok(());
     }
 
+    let timeout_secs = cli.timeout;
+    let command_future = execute_command(cli, instance);
+    if timeout_secs == 0 {
+        command_future.await
+    } else {
+        tokio::time::timeout(Duration::from_secs(timeout_secs), command_future)
+            .await
+            .map_err(|_elapsed| Error::CommandTimeout(timeout_secs))?
+    }
+}
+
+/// Execute the selected command against the given browser instance.
+///
+/// # Errors
+///
+/// Returns an error if the command fails.
+async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), Error> {
     match cli.command {
         Command::Windows(w) => match w.command {
             WindowsCommand::List => {

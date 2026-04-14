@@ -46,10 +46,12 @@ const pendingAuthTabs = new Set();
 /**
  * Pending credentials for tabs opened with username/password.
  *
- * Maps `tabId` → `{ username, password }`. The `onAuthRequired` listener
- * provides these credentials to the browser's HTTP auth challenge, then
- * removes the entry so the browser's built-in credential cache takes over
- * for subsequent requests.
+ * Maps URL origin (e.g. `"https://example.com"`) → `{ username, password }`.
+ * Keyed by origin rather than tab ID because the 401 challenge may fire
+ * during `tabs.create()` before the tab ID is known. The `onAuthRequired`
+ * listener matches on the request URL's origin, provides the credentials,
+ * and removes the entry so the browser's built-in credential cache takes
+ * over for subsequent requests.
  */
 const pendingCredentials = new Map();
 
@@ -86,15 +88,21 @@ browser.webRequest.onAuthRequired.addListener(
   (details) => {
     if (details.tabId >= 0) {
       pendingAuthTabs.add(details.tabId);
+    }
 
-      // If we have pending credentials for this tab, provide them to the
-      // browser and remove the entry. The browser caches the credentials
-      // internally for the realm, so future requests are handled automatically.
-      const creds = pendingCredentials.get(details.tabId);
+    // Match pending credentials by the request URL's origin.
+    // Do NOT delete the entry here — multiple requests to the same origin
+    // (main page, favicon, subresources) may each trigger a 401 during the
+    // initial page load. The entry is cleaned up by cmdOpenTab after the
+    // tab finishes loading.
+    try {
+      const origin = new URL(details.url).origin;
+      const creds = pendingCredentials.get(origin);
       if (creds) {
-        pendingCredentials.delete(details.tabId);
         return { authCredentials: creds };
       }
+    } catch {
+      // URL parsing failed; ignore and fall through.
     }
     return {};
   },
@@ -527,25 +535,22 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, us
   }
 
   // If credentials are provided, ensure the URL does not contain them and
-  // register the credentials for the onAuthRequired listener.
+  // register the credentials for the onAuthRequired listener BEFORE creating
+  // the tab, because the 401 challenge may fire during tabs.create() itself.
   let cleanUrl = url;
   if (url !== null && username !== null && password !== null) {
     const parsed = new URL(url);
     parsed.username = "";
     parsed.password = "";
     cleanUrl = parsed.href;
+    // Store by origin so onAuthRequired can match before we know the tab ID.
+    pendingCredentials.set(parsed.origin, { username, password });
   }
 
   if (cleanUrl !== null) {
     createProps.url = cleanUrl;
   }
   let tab = await browser.tabs.create(createProps);
-
-  // Store credentials so the onAuthRequired listener can provide them when
-  // the server responds with a 401 challenge.
-  if (username !== null && password !== null) {
-    pendingCredentials.set(tab.id, { username, password });
-  }
 
   // On Wayland, the compositor may block Firefox's attempt to activate the target
   // window during tabs.create, causing Firefox to fall back to the active window.
@@ -562,17 +567,19 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, us
     }
     const moved = await browser.tabs.move(tab.id, { windowId, index: moveIndex });
     tab = Array.isArray(moved) ? moved[0] : moved;
-    // If the tab was moved, re-register credentials under the same tab ID
-    // (tabs.move does not change the tab ID).
   }
 
-  // Wait for the page to finish loading (which includes the auth exchange)
-  // before returning tab details, so the caller sees the final URL.
-  if (username !== null && password !== null) {
-    await waitForTabComplete(tab.id);
-    tab = await browser.tabs.get(tab.id);
-    // Clean up credentials in case auth was never challenged (e.g. no 401)
-    pendingCredentials.delete(tab.id);
+  // When credentials are provided, schedule cleanup of the pending
+  // credentials entry.  The onAuthRequired listener will use the
+  // credentials when the server responds with 401 (or the browser may
+  // use its own credential cache for repeat visits).  We do NOT wait
+  // for the page to finish loading — the auth exchange happens
+  // asynchronously and some pages never reach "complete" status.
+  if (url !== null && username !== null && password !== null) {
+    const origin = new URL(url).origin;
+    // Clean up after 30 s — by then the auth exchange has either
+    // succeeded or the user has dismissed the prompt.
+    setTimeout(() => { pendingCredentials.delete(origin); }, 30_000);
   }
 
   return { type: "Tab", ...await serializeTabDetails(tab) };
@@ -647,13 +654,17 @@ async function navigateHistory(tabId, delta) {
   const currentDetails = await serializeTabDetails(tab);
 
   // When the Navigation API provided position data, check the boundary without
-  // waiting for any events.
+  // waiting for any events.  The Navigation API only sees same-document entries;
+  // cross-document entries are hidden.  We can only be sure the boundary is
+  // reached when there are no visible steps AND no hidden entries that might
+  // contain cross-document history in the requested direction.
   if (currentDetails.history_steps_back !== null) {
     const stepsAvailable = delta < 0
       ? currentDetails.history_steps_back
       : currentDetails.history_steps_forward;
-    if (stepsAvailable === 0) {
-      // Already at the boundary; no navigation will occur.
+    const hiddenCount = currentDetails.history_hidden_count ?? 0;
+    if (stepsAvailable === 0 && hiddenCount === 0) {
+      // Truly at the boundary; no navigation will occur.
       return { type: "Tab", ...currentDetails };
     }
   }
@@ -683,9 +694,12 @@ async function navigateHistory(tabId, delta) {
       }
     }
 
-    // A fallback timer is only needed when the Navigation API is unavailable
-    // and we cannot guarantee that a URL-change event will arrive.
-    const fallbackTimer = currentDetails.history_steps_back === null
+    // A fallback timer is needed when the Navigation API is unavailable OR
+    // when there are hidden (cross-document) history entries whose position
+    // we cannot determine — history.go() may or may not produce a URL change.
+    const hiddenCount = currentDetails.history_hidden_count ?? 0;
+    const needsFallback = currentDetails.history_steps_back === null || hiddenCount > 0;
+    const fallbackTimer = needsFallback
       ? setTimeout(finish, 5000)
       : null;
 

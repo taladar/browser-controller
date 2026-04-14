@@ -128,6 +128,7 @@ async fn open_close_tab_chrome() {
     reason = "test assertions use panic on unexpected variants"
 )]
 async fn navigate_tab_body(h: &Harness) {
+    let server = browser_controller_integration_tests::test_server::Server::start_plain();
     let window_id = first_window_id(h).await;
 
     // Open a tab with about:blank
@@ -149,11 +150,11 @@ async fn navigate_tab_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     };
 
-    // Navigate to Google (reliably available)
-    let target_url = "https://www.google.com/";
+    // Navigate to local test server
+    let target_url = server.base_url();
     h.send_command(CliCommand::NavigateTab {
         tab_id,
-        url: target_url.to_owned(),
+        url: target_url.clone(),
     })
     .await
     .expect("NavigateTab should succeed");
@@ -173,8 +174,8 @@ async fn navigate_tab_body(h: &Harness) {
             assert!(tab.is_some(), "tab {tab_id} should still exist");
             let tab = tab.expect("just asserted it exists");
             assert!(
-                tab.url.starts_with("https://www.google.com"),
-                "tab URL should start with https://www.google.com after NavigateTab, got {}",
+                tab.url.starts_with(&target_url),
+                "tab URL should start with {target_url} after NavigateTab, got {}",
                 tab.url,
             );
         }

@@ -12,6 +12,7 @@
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
+use browser_controller_integration_tests::test_server;
 use browser_controller_types::{CliCommand, CliResult};
 
 /// Helper to get the first window ID.
@@ -32,22 +33,23 @@ async fn first_window_id(h: &Harness) -> u32 {
 
 /// Shared GoBack/GoForward test body.
 ///
-/// Opens a tab, navigates to two URLs, then goes back and forward.
+/// Opens a tab, navigates to a second page, then goes back and forward.
 #[expect(
     clippy::panic,
     reason = "test assertions use panic on unexpected variants"
 )]
 async fn go_back_forward_body(h: &Harness) {
+    let server = test_server::Server::start_plain();
     let window_id = first_window_id(h).await;
 
-    // Open a tab with Google (reliably available)
-    let url1 = "https://www.google.com/";
+    // Open a tab on the test server's main page
+    let url1 = server.base_url();
     let open_result = h
         .send_command(CliCommand::OpenTab {
             window_id,
             insert_before_tab_id: None,
             insert_after_tab_id: None,
-            url: Some(url1.to_owned()),
+            url: Some(url1.clone()),
             username: None,
             password: None,
             background: false,
@@ -60,21 +62,21 @@ async fn go_back_forward_body(h: &Harness) {
     };
 
     // Wait for first page to fully load
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    // Navigate to a second URL (same domain, different path)
-    let url2 = "https://www.google.com/search?q=test";
+    // Navigate to the second page
+    let url2 = server.page2_url();
     h.send_command(CliCommand::NavigateTab {
         tab_id,
-        url: url2.to_owned(),
+        url: url2.clone(),
     })
     .await
     .expect("NavigateTab should succeed");
 
     // Wait for second page to fully load
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    // Verify we're on url2
+    // Verify we're on page2
     let tabs = h
         .send_command(CliCommand::ListTabs { window_id })
         .await
@@ -86,8 +88,8 @@ async fn go_back_forward_body(h: &Harness) {
                 .find(|t| t.id == tab_id)
                 .expect("tab should exist");
             assert!(
-                tab.url.contains("search?q=test") || tab.url.contains("search%3Fq%3Dtest"),
-                "tab should be on search URL, got {}",
+                tab.url.contains("/page2"),
+                "tab should be on /page2, got {}",
                 tab.url,
             );
         }
@@ -102,7 +104,7 @@ async fn go_back_forward_body(h: &Harness) {
     // Wait for navigation
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    // Verify we're back on the Google homepage (no search query)
+    // Verify we're back on the main page (no /page2)
     let tabs = h
         .send_command(CliCommand::ListTabs { window_id })
         .await
@@ -114,8 +116,8 @@ async fn go_back_forward_body(h: &Harness) {
                 .find(|t| t.id == tab_id)
                 .expect("tab should exist");
             assert!(
-                tab.url.starts_with("https://www.google.com") && !tab.url.contains("search?q=test"),
-                "tab should be back on google.com homepage after GoBack, got {}",
+                !tab.url.contains("/page2"),
+                "tab should be on main page after GoBack, got {}",
                 tab.url,
             );
         }
@@ -130,7 +132,7 @@ async fn go_back_forward_body(h: &Harness) {
     // Wait for navigation
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    // Verify we're back on the search page
+    // Verify we're back on page2
     let tabs = h
         .send_command(CliCommand::ListTabs { window_id })
         .await
@@ -142,8 +144,8 @@ async fn go_back_forward_body(h: &Harness) {
                 .find(|t| t.id == tab_id)
                 .expect("tab should exist");
             assert!(
-                tab.url.contains("google.com"),
-                "tab should be on google.com after GoForward, got {}",
+                tab.url.contains("/page2"),
+                "tab should be on /page2 after GoForward, got {}",
                 tab.url,
             );
         }

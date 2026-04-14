@@ -15,5 +15,6 @@ pub mod harness;
 pub mod mediator;
 pub mod niri;
 pub mod profile;
+pub mod test_server;
 
 pub use harness::Harness;
