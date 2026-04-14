@@ -90,6 +90,33 @@ full command reference.
 Load via `about:debugging` → This Firefox → Load Temporary Add-on, selecting
 `extension/manifest.json`.
 
+Alternatively, if Firefox has remote debugging enabled, you can load or reload
+the extension from the command line:
+
+```sh
+browser-controller load-extension --path ./extension --port 6000
+```
+
+This connects to Firefox's Remote Debugging Protocol and installs the
+extension as a temporary add-on. If the extension is already loaded, it
+reloads it. This is useful during development to quickly test changes without
+navigating `about:debugging` manually each time.
+
+To enable the debugger server, set these preferences in `about:config`:
+
+- `devtools.debugger.remote-enabled` = `true`
+- `devtools.chrome.enabled` = `true`
+- `devtools.debugger.prompt-connection` = `false`
+
+Then either restart Firefox with `firefox --start-debugger-server 6000`
+(the port must be space-separated, not `=`-separated), or without
+restarting press Shift+F2 to open the Developer Toolbar and type `listen`.
+
+**Note:** This command is for development and testing of unreleased extension
+versions only. Temporary extensions are removed when Firefox restarts. For
+production use, install the extension through `about:addons` or the Mozilla
+Add-ons website.
+
 #### Chrome / Chromium
 
 Enable Developer mode in `chrome://extensions`, then click Load unpacked and

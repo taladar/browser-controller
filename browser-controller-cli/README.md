@@ -56,6 +56,7 @@ browser-controller install-manifest --browser chrome --extension-id <id>
 | `tabs close <tab-id>` | Close a tab |
 | `tabs navigate <tab-id> <url>` | Navigate a tab to a URL |
 | `install-manifest` | Install the native messaging host manifest |
+| `load-extension` | Load/reload a temporary extension via Firefox RDP (development only) |
 | `generate-manpage` | Generate a man page |
 | `generate-shell-completion` | Generate shell completion scripts |
 
