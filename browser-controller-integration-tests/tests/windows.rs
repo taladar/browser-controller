@@ -148,8 +148,7 @@ async fn open_close_window_chrome() {
     .await;
 }
 
-/// Title prefix test — Firefox-only (Chrome does not support titlePreface).
-#[tokio::test]
+/// Shared title prefix test body — Firefox-only (Chrome does not support titlePreface).
 #[expect(
     clippy::panic,
     reason = "test assertions use panic on unexpected variants"
@@ -158,72 +157,93 @@ async fn open_close_window_chrome() {
     clippy::indexing_slicing,
     reason = "test asserts non-empty before indexing"
 )]
+async fn title_prefix_body(h: &Harness, prefix: &str) {
+    // Get a window ID
+    let result = h
+        .send_command(CliCommand::ListWindows)
+        .await
+        .expect("ListWindows should succeed");
+    let window_id = match &result {
+        CliResult::Windows { windows } => {
+            assert!(!windows.is_empty(), "need at least 1 window");
+            windows[0].id
+        }
+        other => panic!("expected Windows, got {other:?}"),
+    };
+
+    // Set title prefix
+    h.send_command(CliCommand::SetWindowTitlePrefix {
+        window_id,
+        prefix: prefix.to_owned(),
+    })
+    .await
+    .expect("SetWindowTitlePrefix should succeed");
+
+    // Verify via ListWindows that the prefix is reported correctly
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let result = h
+        .send_command(CliCommand::ListWindows)
+        .await
+        .expect("ListWindows should succeed");
+    match &result {
+        CliResult::Windows { windows } => {
+            let w = windows.iter().find(|w| w.id == window_id);
+            assert!(w.is_some(), "window should still exist");
+            pretty_assertions::assert_eq!(
+                w.expect("just asserted").title_prefix.as_deref(),
+                Some(prefix),
+                "title_prefix should match exactly (including trailing whitespace)",
+            );
+        }
+        other => panic!("expected Windows, got {other:?}"),
+    }
+
+    // If niri is available, verify the title prefix is visible
+    if browser_controller_integration_tests::niri::is_available()
+        && let Some(pid) = h.browser_pid
+    {
+        let has_prefix =
+            browser_controller_integration_tests::niri::has_window_with_title_prefix(pid, prefix)
+                .expect("niri title prefix check should succeed");
+        assert!(
+            has_prefix,
+            "expected a window with title prefix {prefix:?} for PID {pid}",
+        );
+    }
+
+    // Remove title prefix
+    h.send_command(CliCommand::RemoveWindowTitlePrefix { window_id })
+        .await
+        .expect("RemoveWindowTitlePrefix should succeed");
+
+    // If niri is available, verify the prefix is removed
+    if browser_controller_integration_tests::niri::is_available()
+        && let Some(pid) = h.browser_pid
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let has_prefix =
+            browser_controller_integration_tests::niri::has_window_with_title_prefix(pid, prefix)
+                .expect("niri title prefix check should succeed");
+        assert!(
+            !has_prefix,
+            "title prefix {prefix:?} should be removed from all windows for PID {pid}",
+        );
+    }
+}
+
+#[tokio::test]
 async fn title_prefix_firefox() {
     harness::run(browser::Kind::Firefox, |h| {
-        Box::pin(async move {
-            // Get a window ID
-            let result = h
-                .send_command(CliCommand::ListWindows)
-                .await
-                .expect("ListWindows should succeed");
-            let window_id = match &result {
-                CliResult::Windows { windows } => {
-                    assert!(!windows.is_empty(), "need at least 1 window");
-                    windows[0].id
-                }
-                other => panic!("expected Windows, got {other:?}"),
-            };
+        Box::pin(title_prefix_body(h, "TEST-PREFIX:"))
+    })
+    .await;
+}
 
-            let prefix = "TEST-PREFIX: ";
-
-            // Set title prefix
-            h.send_command(CliCommand::SetWindowTitlePrefix {
-                window_id,
-                prefix: prefix.to_owned(),
-            })
-            .await
-            .expect("SetWindowTitlePrefix should succeed");
-
-            // If niri is available, verify the title prefix is visible
-            if browser_controller_integration_tests::niri::is_available()
-                && let Some(pid) = h.browser_pid
-            {
-                // Give Firefox a moment to update the window title
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-                let has_prefix =
-                    browser_controller_integration_tests::niri::has_window_with_title_prefix(
-                        pid, prefix,
-                    )
-                    .expect("niri title prefix check should succeed");
-                assert!(
-                    has_prefix,
-                    "expected a window with title prefix {prefix:?} for PID {pid}",
-                );
-            }
-
-            // Remove title prefix
-            h.send_command(CliCommand::RemoveWindowTitlePrefix { window_id })
-                .await
-                .expect("RemoveWindowTitlePrefix should succeed");
-
-            // If niri is available, verify the prefix is removed
-            if browser_controller_integration_tests::niri::is_available()
-                && let Some(pid) = h.browser_pid
-            {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-                let has_prefix =
-                    browser_controller_integration_tests::niri::has_window_with_title_prefix(
-                        pid, prefix,
-                    )
-                    .expect("niri title prefix check should succeed");
-                assert!(
-                    !has_prefix,
-                    "title prefix {prefix:?} should be removed from all windows for PID {pid}",
-                );
-            }
-        })
+#[tokio::test]
+async fn title_prefix_trailing_space_firefox() {
+    harness::run(browser::Kind::Firefox, |h| {
+        Box::pin(title_prefix_body(h, "TEST-PREFIX: "))
     })
     .await;
 }

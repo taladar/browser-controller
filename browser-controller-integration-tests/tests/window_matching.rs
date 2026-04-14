@@ -218,9 +218,8 @@ async fn match_by_window_title_regex_chrome() {
     clippy::panic,
     reason = "test assertions use panic on unexpected variants"
 )]
-async fn match_by_window_title_prefix_body(h: &Harness) {
+async fn match_by_window_title_prefix_body(h: &Harness, prefix: &str) {
     let (window_id, _) = first_window_info(h).await;
-    let prefix = "MATCH-TEST: ";
 
     // Set a title prefix
     h.send_command(CliCommand::SetWindowTitlePrefix {
@@ -253,7 +252,15 @@ async fn match_by_window_title_prefix_body(h: &Harness) {
 #[tokio::test]
 async fn match_by_window_title_prefix_firefox() {
     harness::run(browser::Kind::Firefox, |h| {
-        Box::pin(match_by_window_title_prefix_body(h))
+        Box::pin(match_by_window_title_prefix_body(h, "MATCH-TEST:"))
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn match_by_window_title_prefix_trailing_space_firefox() {
+    harness::run(browser::Kind::Firefox, |h| {
+        Box::pin(match_by_window_title_prefix_body(h, "MATCH-TEST: "))
     })
     .await;
 }

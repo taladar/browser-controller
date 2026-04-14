@@ -456,6 +456,7 @@ async function cmdOpenWindow(titlePrefix) {
   const win = await browser.windows.create({});
   if (isFirefox && titlePrefix !== null) {
     await browser.windows.update(win.id, { titlePreface: titlePrefix });
+    await browser.sessions.setWindowValue(win.id, "titlePreface", titlePrefix);
   }
   return { type: "WindowId", window_id: win.id };
 }
