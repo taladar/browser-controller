@@ -76,6 +76,7 @@ async fn event_tab_opened_body(h: &Harness) {
             username: None,
             password: None,
             background: true,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab")
@@ -126,6 +127,7 @@ async fn event_tab_closed_body(h: &Harness) {
             username: None,
             password: None,
             background: true,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab")
@@ -180,6 +182,7 @@ async fn event_tab_activated_body(h: &Harness) {
             username: None,
             password: None,
             background: true,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab")
@@ -242,6 +245,7 @@ async fn event_tab_navigated_body(h: &Harness) {
             username: None,
             password: None,
             background: true,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab")
@@ -307,6 +311,7 @@ async fn event_tab_title_changed_body(h: &Harness) {
             username: None,
             password: None,
             background: true,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab")
@@ -372,6 +377,7 @@ async fn event_tab_status_changed_body(h: &Harness) {
             username: None,
             password: None,
             background: true,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab")

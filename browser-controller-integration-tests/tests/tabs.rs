@@ -74,6 +74,7 @@ async fn open_close_tab_body(h: &Harness) {
             username: None,
             password: None,
             background: false,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab should succeed");
@@ -141,6 +142,7 @@ async fn navigate_tab_body(h: &Harness) {
             username: None,
             password: None,
             background: false,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab should succeed");

@@ -92,6 +92,7 @@ async fn open_blank_tab(h: &Harness, window_id: u32) -> u32 {
             username: None,
             password: None,
             background: false,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab should succeed");
@@ -113,6 +114,7 @@ async fn open_url_tab(h: &Harness, window_id: u32, url: &str) -> u32 {
             username: None,
             password: None,
             background: true,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab should succeed");
@@ -1000,6 +1002,7 @@ async fn match_by_tab_in_reader_mode_body(h: &Harness) {
             username: None,
             password: None,
             background: false,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab should succeed");

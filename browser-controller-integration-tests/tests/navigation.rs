@@ -53,6 +53,7 @@ async fn go_back_forward_body(h: &Harness) {
             username: None,
             password: None,
             background: false,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab should succeed");

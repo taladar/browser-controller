@@ -55,6 +55,11 @@ pub struct TabSummary {
     pub url: String,
     /// Whether this is the currently active (focused) tab in its window.
     pub is_active: bool,
+    /// The cookie store (container) ID this tab belongs to.
+    ///
+    /// Firefox-specific; `None` on browsers that don't support containers.
+    #[serde(default)]
+    pub cookie_store_id: Option<String>,
 }
 
 /// A summary of a browser window including its tabs.
@@ -253,6 +258,26 @@ pub struct TabDetails {
     /// in that case [`TabDetails::history_length`] already reflects the full total.
     #[serde(default)]
     pub history_hidden_count: Option<u32>,
+    /// The cookie store (container) ID this tab belongs to.
+    ///
+    /// Firefox-specific; `None` on browsers that don't support containers.
+    #[serde(default)]
+    pub cookie_store_id: Option<String>,
+}
+
+/// Information about a Firefox container (contextual identity).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerInfo {
+    /// The cookie store ID (e.g. `"firefox-container-1"`).
+    pub cookie_store_id: String,
+    /// Human-readable name (e.g. `"Work"`).
+    pub name: String,
+    /// Color identifier (e.g. `"blue"`).
+    pub color: String,
+    /// Hex color code (e.g. `"#37adff"`).
+    pub color_code: String,
+    /// Icon identifier (e.g. `"briefcase"`).
+    pub icon: String,
 }
 
 /// An event emitted by the browser extension and broadcast to all event-stream subscribers.
@@ -435,6 +460,11 @@ pub enum CliCommand {
         /// in the window remains active.
         #[serde(default)]
         background: bool,
+        /// Firefox container (cookie store) ID to open the tab in.
+        ///
+        /// E.g. `"firefox-container-1"`. Ignored on browsers without container support.
+        #[serde(default)]
+        cookie_store_id: Option<String>,
     },
     /// Activate a tab, making it the focused tab in its window.
     ActivateTab {
@@ -535,6 +565,20 @@ pub enum CliCommand {
     /// newline-delimited JSON on the same connection until the client disconnects.
     /// No [`CliResponse`] is sent; events arrive directly as [`BrowserEvent`] JSON.
     SubscribeEvents,
+    /// List all Firefox containers (contextual identities).
+    ///
+    /// Returns an empty list on browsers that don't support containers.
+    ListContainers,
+    /// Close a tab and reopen its URL in a different container.
+    ///
+    /// Firefox-only. The tab is closed and a new tab is created in the target
+    /// container with the same URL.
+    ReopenTabInContainer {
+        /// The ID of the tab to reopen.
+        tab_id: u32,
+        /// The target container's cookie store ID.
+        cookie_store_id: String,
+    },
     /// List downloads, optionally filtered by state.
     ListDownloads {
         /// Filter by download state.
@@ -630,6 +674,11 @@ pub enum CliResult {
     },
     /// Details of a newly created or moved tab.
     Tab(TabDetails),
+    /// Container list returned by `ListContainers`.
+    Containers {
+        /// The list of containers.
+        containers: Vec<ContainerInfo>,
+    },
     /// Download list returned by `ListDownloads`.
     Downloads {
         /// The list of downloads.

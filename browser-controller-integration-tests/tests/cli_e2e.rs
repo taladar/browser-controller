@@ -165,6 +165,7 @@ async fn cli_tabs_sort_body(h: &Harness) {
                 username: None,
                 password: None,
                 background: true,
+                cookie_store_id: None,
             })
             .await
             .expect("OpenTab should succeed");

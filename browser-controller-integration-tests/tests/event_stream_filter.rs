@@ -88,6 +88,7 @@ async fn open_test_tab(h: &Harness, window_id: u32) -> u32 {
             username: None,
             password: None,
             background: true,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab should succeed");

@@ -414,6 +414,7 @@ async function dispatch(commandType, params) {
         params.username ?? null,
         params.password ?? null,
         params.background ?? false,
+        params.cookie_store_id ?? null,
       );
     case "ActivateTab":
       return cmdActivateTab(params.tab_id);
@@ -443,6 +444,10 @@ async function dispatch(commandType, params) {
       return cmdUnmuteTab(params.tab_id);
     case "MoveTab":
       return cmdMoveTab(params.tab_id, params.new_index);
+    case "ListContainers":
+      return cmdListContainers();
+    case "ReopenTabInContainer":
+      return cmdReopenTabInContainer(params.tab_id, params.cookie_store_id);
     case "ListDownloads":
       return cmdListDownloads(params.state ?? null, params.limit ?? null, params.query ?? null);
     case "StartDownload":
@@ -590,8 +595,11 @@ async function waitForTabComplete(tabId) {
  * challenge. The browser then caches the credentials for the realm, so
  * subsequent requests work automatically.
  */
-async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, username, password, background) {
+async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, username, password, background, cookieStoreId) {
   const createProps = { windowId, active: !background };
+  if (cookieStoreId !== null) {
+    createProps.cookieStoreId = cookieStoreId;
+  }
   if (insertBeforeTabId !== null) {
     const refTab = await browser.tabs.get(insertBeforeTabId);
     createProps.index = refTab.index;
@@ -954,6 +962,44 @@ async function cmdEraseAllDownloads(state) {
 }
 
 // ---------------------------------------------------------------------------
+// Container command implementations
+// ---------------------------------------------------------------------------
+
+/** List all Firefox containers (contextual identities). */
+async function cmdListContainers() {
+  if (!isFirefox || !browser.contextualIdentities) {
+    return { type: "Containers", containers: [] };
+  }
+  const identities = await browser.contextualIdentities.query({});
+  return {
+    type: "Containers",
+    containers: identities.map((ci) => ({
+      cookie_store_id: ci.cookieStoreId,
+      name: ci.name,
+      color: ci.color,
+      color_code: ci.colorCode,
+      icon: ci.icon,
+    })),
+  };
+}
+
+/** Close a tab and reopen its URL in a different container. */
+async function cmdReopenTabInContainer(tabId, cookieStoreId) {
+  const tab = await browser.tabs.get(tabId);
+  const url = tab.url;
+  const windowId = tab.windowId;
+  const index = tab.index;
+  await browser.tabs.remove(tabId);
+  const newTab = await browser.tabs.create({
+    url,
+    windowId,
+    index,
+    cookieStoreId,
+  });
+  return { type: "Tab", ...await serializeTabDetails(newTab) };
+}
+
+// ---------------------------------------------------------------------------
 // Serialization helpers
 // ---------------------------------------------------------------------------
 
@@ -1068,6 +1114,7 @@ function serializeTabSummary(tab) {
     title: tab.title ?? "",
     url: tab.url ?? "",
     is_active: tab.active,
+    cookie_store_id: tab.cookieStoreId ?? null,
   };
 }
 
@@ -1150,6 +1197,7 @@ async function serializeTabDetails(tab) {
     history_steps_back,
     history_steps_forward,
     history_hidden_count,
+    cookie_store_id: tab.cookieStoreId ?? null,
   };
 }
 

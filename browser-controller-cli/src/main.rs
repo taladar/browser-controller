@@ -530,6 +530,9 @@ pub struct TabMatcher {
     /// Match only tabs with this loading status.
     #[clap(long)]
     pub tab_status: Option<TabStatusArg>,
+    /// Match only tabs in a specific Firefox container (by cookie store ID).
+    #[clap(long)]
+    pub tab_container: Option<String>,
     /// How to handle a criterion that matches multiple tabs.
     ///
     /// `abort` (the default) treats more than one match as an error.
@@ -614,6 +617,9 @@ impl std::fmt::Display for TabMatcher {
         if let Some(status) = self.tab_status {
             parts.push(format!("tab-status={status:?}"));
         }
+        if let Some(ref container) = self.tab_container {
+            parts.push(format!("tab-container={container:?}"));
+        }
         if parts.is_empty() {
             write!(f, "(all tabs)")
         } else {
@@ -689,6 +695,8 @@ pub enum Command {
     Tabs(TabsArgs),
     /// Manage downloads.
     Downloads(DownloadsArgs),
+    /// Manage Firefox containers (contextual identities).
+    Containers(ContainersArgs),
     /// Generate a man page for this tool.
     GenerateManpage {
         /// Directory in which to write the generated man page.
@@ -865,6 +873,12 @@ pub enum TabsCommand {
         /// Requires `--url`.
         #[clap(long, requires = "url")]
         if_url_does_not_exist: bool,
+        /// Open the tab in a specific Firefox container (cookie store ID).
+        ///
+        /// E.g. `firefox-container-1`. Use `containers list` to see available containers.
+        /// Ignored on browsers without container support.
+        #[clap(long)]
+        container: Option<String>,
     },
     /// Activate a tab, making it the focused tab in its window.
     Activate {
@@ -880,6 +894,18 @@ pub enum TabsCommand {
         /// URL to load in the tab.
         #[clap(long)]
         url: String,
+    },
+    /// Close one or more tabs and reopen them in a different Firefox container.
+    ///
+    /// The tabs are closed and new tabs are created in the target container
+    /// with the same URLs. Firefox-only.
+    ReopenInContainer {
+        /// Criteria selecting the tab(s) to reopen.
+        #[clap(flatten)]
+        tab: TabMatcher,
+        /// Target container's cookie store ID (e.g. `firefox-container-1`).
+        #[clap(long)]
+        container: String,
     },
     /// Reload one or more tabs.
     Reload {
@@ -1109,6 +1135,21 @@ pub enum DownloadsCommand {
         #[clap(long)]
         state: Option<DownloadStateArg>,
     },
+}
+
+/// Arguments for the `containers` subcommand group.
+#[derive(clap::Args, Debug)]
+pub struct ContainersArgs {
+    /// Container operation to perform.
+    #[clap(subcommand)]
+    command: ContainersCommand,
+}
+
+/// Operations on Firefox containers (contextual identities).
+#[derive(clap::Subcommand, Debug)]
+pub enum ContainersCommand {
+    /// List all available containers.
+    List,
 }
 
 /// A discovered mediator instance.
@@ -1529,6 +1570,9 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
                     yn(tab.is_in_reader_mode),
                     yn(tab.incognito),
                 );
+                if let Some(ref cid) = tab.cookie_store_id {
+                    println!("  Container: {cid}");
+                }
             }
         }
         CliResult::Tab(tab) => {
@@ -1558,6 +1602,15 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
                 yn(tab.is_in_reader_mode),
                 yn(tab.incognito),
             );
+            if let Some(ref cid) = tab.cookie_store_id {
+                println!("  Container: {cid}");
+            }
+        }
+        CliResult::Containers { containers } => {
+            for c in containers {
+                println!("{} \u{2014} {} ({})", c.cookie_store_id, c.name, c.color,);
+                println!("  Color: {} ({})  Icon: {}", c.color, c.color_code, c.icon);
+            }
         }
         CliResult::Downloads { downloads } => {
             for dl in downloads {
@@ -1972,6 +2025,11 @@ fn match_tabs(tabs: &[TabDetails], m: &TabMatcher) -> Result<Vec<u32>, Error> {
             {
                 return false;
             }
+            if let Some(ref container) = m.tab_container
+                && tab.cookie_store_id.as_deref() != Some(container.as_str())
+            {
+                return false;
+            }
             true
         })
         .map(|tab| tab.id)
@@ -2353,6 +2411,7 @@ async fn do_stuff() -> Result<(), Error> {
         Command::Windows(_)
         | Command::Tabs(_)
         | Command::Downloads(_)
+        | Command::Containers(_)
         | Command::EventStream { .. } => {}
     }
 
@@ -2489,6 +2548,7 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 password_env,
                 background,
                 if_url_does_not_exist,
+                container,
             } => {
                 // Guard: skip opening if a tab with the given URL already exists anywhere.
                 if if_url_does_not_exist && let Some(ref check_url) = url {
@@ -2531,6 +2591,7 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                             username: username.clone(),
                             password: password.clone(),
                             background,
+                            cookie_store_id: container.clone(),
                         },
                     )
                     .await?;
@@ -2554,6 +2615,20 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                         CliCommand::NavigateTab {
                             tab_id,
                             url: url.clone(),
+                        },
+                    )
+                    .await?;
+                    print_result(&result, cli.output)?;
+                }
+            }
+            TabsCommand::ReopenInContainer { tab, container } => {
+                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                for tab_id in tab_ids {
+                    let result = send_command(
+                        &instance.socket_path,
+                        CliCommand::ReopenTabInContainer {
+                            tab_id,
+                            cookie_store_id: container.clone(),
                         },
                     )
                     .await?;
@@ -2849,6 +2924,13 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 print_result(&result, cli.output)?;
             }
         },
+        Command::Containers(c) => match c.command {
+            ContainersCommand::List => {
+                let result =
+                    send_command(&instance.socket_path, CliCommand::ListContainers).await?;
+                print_result(&result, cli.output)?;
+            }
+        },
         // Already handled above.
         Command::Instances
         | Command::EventStream { .. }
@@ -2987,6 +3069,7 @@ mod test {
             history_steps_back: None,
             history_steps_forward: None,
             history_hidden_count: None,
+            cookie_store_id: None,
         }
     }
 

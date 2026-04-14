@@ -91,6 +91,7 @@ async fn auth_credentials_body(h: &Harness) {
             username: Some("testuser".to_owned()),
             password: Some("testpass".to_owned()),
             background: true,
+            cookie_store_id: None,
         })
         .await
         .expect("OpenTab with credentials should succeed");
