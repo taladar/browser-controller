@@ -308,7 +308,10 @@ async fn match_by_window_focused_chrome() {
 async fn match_by_window_not_focused_body(h: &Harness) {
     // Open a second window so there's a non-focused one
     let open_result = h
-        .send_command(CliCommand::OpenWindow { title_prefix: None })
+        .send_command(CliCommand::OpenWindow {
+            title_prefix: None,
+            incognito: false,
+        })
         .await
         .expect("OpenWindow should succeed");
     let new_window_id = match open_result {
@@ -397,6 +400,72 @@ async fn match_by_window_last_focused_chrome() {
     .await;
 }
 
+// --- Test: --window-not-last-focused ---
+
+#[expect(
+    clippy::panic,
+    reason = "test assertions use panic on unexpected variants"
+)]
+async fn match_by_window_not_last_focused_body(h: &Harness) {
+    // Open a second window so there's a non-last-focused one
+    let open_result = h
+        .send_command(CliCommand::OpenWindow {
+            title_prefix: None,
+            incognito: false,
+        })
+        .await
+        .expect("OpenWindow should succeed");
+    let new_window_id = match open_result {
+        CliResult::WindowId { window_id } => window_id,
+        other => panic!("expected WindowId, got {other:?}"),
+    };
+
+    let stdout = run_cli(
+        h,
+        &[
+            "tabs",
+            "list",
+            "--window-not-last-focused",
+            "--if-matches-multiple",
+            "all",
+        ],
+    )
+    .await;
+
+    let result: CliResult = serde_json::from_str(stdout.trim()).expect("should parse as CliResult");
+    match result {
+        CliResult::Tabs { tabs } => {
+            assert!(
+                !tabs.is_empty(),
+                "should have tabs from non-last-focused window(s)",
+            );
+        }
+        other => panic!("expected Tabs, got {other:?}"),
+    }
+
+    h.send_command(CliCommand::CloseWindow {
+        window_id: new_window_id,
+    })
+    .await
+    .expect("CloseWindow should succeed");
+}
+
+#[tokio::test]
+async fn match_by_window_not_last_focused_firefox() {
+    harness::run(browser::Kind::Firefox, |h| {
+        Box::pin(match_by_window_not_last_focused_body(h))
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn match_by_window_not_last_focused_chrome() {
+    harness::run(browser::Kind::Chrome, |h| {
+        Box::pin(match_by_window_not_last_focused_body(h))
+    })
+    .await;
+}
+
 // --- Test: --window-state ---
 
 #[expect(
@@ -452,7 +521,10 @@ async fn match_by_window_state_chrome() {
 async fn match_multiple_abort_body(h: &Harness) {
     // Open a second window so there are multiple
     let open_result = h
-        .send_command(CliCommand::OpenWindow { title_prefix: None })
+        .send_command(CliCommand::OpenWindow {
+            title_prefix: None,
+            incognito: false,
+        })
         .await
         .expect("OpenWindow should succeed");
     let new_window_id = match open_result {
@@ -497,7 +569,10 @@ async fn match_multiple_abort_chrome() {
 async fn match_multiple_all_body(h: &Harness) {
     // Open a second window
     let open_result = h
-        .send_command(CliCommand::OpenWindow { title_prefix: None })
+        .send_command(CliCommand::OpenWindow {
+            title_prefix: None,
+            incognito: false,
+        })
         .await
         .expect("OpenWindow should succeed");
     let new_window_id = match open_result {

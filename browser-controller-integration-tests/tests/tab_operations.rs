@@ -1,4 +1,4 @@
-//! Tab operation tests: pin/unpin, mute/unmute, move, activate.
+//! Tab operation tests: pin/unpin, mute/unmute, move, activate, discard/warmup.
 
 #![expect(
     clippy::tests_outside_test_module,
@@ -12,6 +12,7 @@
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
+use browser_controller_integration_tests::test_server;
 use browser_controller_types::{CliCommand, CliResult};
 
 /// Helper to get the first window ID.
@@ -297,4 +298,82 @@ async fn move_tab_firefox() {
 #[tokio::test]
 async fn move_tab_chrome() {
     harness::run(browser::Kind::Chrome, |h| Box::pin(move_tab_body(h))).await;
+}
+
+/// Shared discard/warmup test body.
+#[expect(
+    clippy::panic,
+    reason = "test assertions use panic on unexpected variants"
+)]
+async fn discard_warmup_body(h: &Harness) {
+    let server = test_server::Server::start_plain();
+    let window_id = first_window_id(h).await;
+    // Open a tab in background (can't discard the active tab)
+    let tab_id = open_test_tab(h, window_id).await;
+    // Navigate it to a real page so it has content to discard
+    h.send_command(CliCommand::NavigateTab {
+        tab_id,
+        url: server.base_url(),
+    })
+    .await
+    .expect("NavigateTab should succeed");
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Make sure tab is not active before discarding
+    let tabs = h
+        .send_command(CliCommand::ListTabs { window_id })
+        .await
+        .expect("ListTabs should succeed");
+    match &tabs {
+        CliResult::Tabs { tabs } => {
+            let tab = tabs.iter().find(|t| t.id == tab_id).expect("tab exists");
+            // If the tab is active, activate the first tab instead
+            if tab.is_active
+                && let Some(other) = tabs.iter().find(|t| t.id != tab_id)
+            {
+                h.send_command(CliCommand::ActivateTab { tab_id: other.id })
+                    .await
+                    .expect("ActivateTab should succeed");
+            }
+        }
+        other => panic!("expected Tabs, got {other:?}"),
+    }
+
+    // Discard the tab
+    h.send_command(CliCommand::DiscardTab { tab_id })
+        .await
+        .expect("DiscardTab should succeed");
+
+    // Verify it's discarded
+    let tabs = h
+        .send_command(CliCommand::ListTabs { window_id })
+        .await
+        .expect("ListTabs should succeed");
+    match &tabs {
+        CliResult::Tabs { tabs } => {
+            let tab = tabs.iter().find(|t| t.id == tab_id).expect("tab exists");
+            assert!(tab.is_discarded, "tab should be discarded after DiscardTab");
+        }
+        other => panic!("expected Tabs, got {other:?}"),
+    }
+
+    // Warm up the tab (Firefox-only, no-op on Chrome)
+    h.send_command(CliCommand::WarmupTab { tab_id })
+        .await
+        .expect("WarmupTab should succeed");
+
+    // Cleanup
+    h.send_command(CliCommand::CloseTab { tab_id })
+        .await
+        .expect("CloseTab should succeed");
+}
+
+#[tokio::test]
+async fn discard_warmup_firefox() {
+    harness::run(browser::Kind::Firefox, |h| Box::pin(discard_warmup_body(h))).await;
+}
+
+#[tokio::test]
+async fn discard_warmup_chrome() {
+    harness::run(browser::Kind::Chrome, |h| Box::pin(discard_warmup_body(h))).await;
 }

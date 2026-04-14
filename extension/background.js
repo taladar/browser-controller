@@ -358,7 +358,7 @@ async function dispatch(commandType, params) {
     case "ListWindows":
       return cmdListWindows();
     case "OpenWindow":
-      return cmdOpenWindow(params.title_prefix ?? null);
+      return cmdOpenWindow(params.title_prefix ?? null, params.incognito ?? false);
     case "CloseWindow":
       return cmdCloseWindow(params.window_id);
     case "SetWindowTitlePrefix":
@@ -391,6 +391,10 @@ async function dispatch(commandType, params) {
       return cmdPinTab(params.tab_id);
     case "UnpinTab":
       return cmdUnpinTab(params.tab_id);
+    case "ToggleReaderMode":
+      return cmdToggleReaderMode(params.tab_id);
+    case "DiscardTab":
+      return cmdDiscardTab(params.tab_id);
     case "WarmupTab":
       return cmdWarmupTab(params.tab_id);
     case "MuteTab":
@@ -451,9 +455,14 @@ async function cmdListWindows() {
 
 /** Opens a new browser window and returns its ID.
  * @param {string|null} titlePrefix - Optional title prefix to set via `titlePreface`.
+ * @param {boolean} incognito - Whether to open the window in private/incognito mode.
  */
-async function cmdOpenWindow(titlePrefix) {
-  const win = await browser.windows.create({});
+async function cmdOpenWindow(titlePrefix, incognito) {
+  const createProps = {};
+  if (incognito) {
+    createProps.incognito = true;
+  }
+  const win = await browser.windows.create(createProps);
   if (isFirefox && titlePrefix !== null) {
     await browser.windows.update(win.id, { titlePreface: titlePrefix });
     await browser.sessions.setWindowValue(win.id, "titlePreface", titlePrefix);
@@ -602,6 +611,20 @@ async function cmdPinTab(tabId) {
 async function cmdUnpinTab(tabId) {
   const tab = await browser.tabs.update(tabId, { pinned: false });
   return { type: "Tab", ...await serializeTabDetails(tab) };
+}
+
+/** Toggles Reader Mode for a tab (Firefox-only). */
+async function cmdToggleReaderMode(tabId) {
+  if (browser.tabs.toggleReaderMode) {
+    await browser.tabs.toggleReaderMode(tabId);
+  }
+  return { type: "Unit" };
+}
+
+/** Discards a tab, unloading its content from memory without closing it. */
+async function cmdDiscardTab(tabId) {
+  await browser.tabs.discard(tabId);
+  return { type: "Unit" };
 }
 
 /** Warms up a discarded tab, loading its content into memory without activating it. */

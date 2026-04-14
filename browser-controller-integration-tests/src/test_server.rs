@@ -70,6 +70,18 @@ impl Server {
     pub fn page2_url(&self) -> String {
         format!("http://127.0.0.1:{}/page2", self.port)
     }
+
+    /// Return the URL for the audio page (autoplays a tone).
+    #[must_use]
+    pub fn audio_url(&self) -> String {
+        format!("http://127.0.0.1:{}/audio", self.port)
+    }
+
+    /// Return the URL for the article page (reader-mode compatible).
+    #[must_use]
+    pub fn article_url(&self) -> String {
+        format!("http://127.0.0.1:{}/article", self.port)
+    }
 }
 
 /// Find a free TCP port by binding to port 0.
@@ -145,6 +157,8 @@ async fn handle_connection(
     let response = match path.as_str() {
         "/" => ok_response("Test Page", "This is the test page."),
         "/page2" => ok_response("Test Page 2", "This is the second test page."),
+        "/audio" => audio_response(),
+        "/article" => article_response(),
         "/auth" => handle_auth(auth_credentials.as_deref(), authorization.as_deref()),
         _ => not_found_response(),
     };
@@ -160,6 +174,70 @@ fn ok_response(title: &str, body: &str) -> String {
     let html = format!(
         "<!DOCTYPE html><html><head><title>{title}</title></head>\
          <body><h1>{body}</h1></body></html>"
+    );
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\
+         Cache-Control: max-age=3600\r\nConnection: close\r\n\r\n{html}",
+        html.len(),
+    )
+}
+
+/// Build a 200 OK response with an autoplaying audio page.
+///
+/// Uses the Web Audio API to generate a continuous tone so the browser marks
+/// the tab as audible.
+fn audio_response() -> String {
+    let html = "<!DOCTYPE html><html><head><title>Audio Page</title></head>\
+        <body><h1>Playing audio</h1>\
+        <script>\
+        const ctx = new AudioContext();\
+        const osc = ctx.createOscillator();\
+        osc.frequency.value = 440;\
+        osc.connect(ctx.destination);\
+        osc.start();\
+        </script></body></html>";
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\
+         Cache-Control: max-age=3600\r\nConnection: close\r\n\r\n{html}",
+        html.len(),
+    )
+}
+
+/// Build a 200 OK response with an article page suitable for Firefox Reader Mode.
+///
+/// Firefox's readability algorithm requires substantial content in an `<article>`
+/// element with many paragraphs. We generate enough content programmatically to
+/// pass the scoring threshold.
+#[expect(clippy::arithmetic_side_effects, reason = "paragraph index arithmetic")]
+fn article_response() -> String {
+    use std::fmt::Write as _;
+    let mut paragraphs = String::new();
+    for i in 0..20u32 {
+        // write! to a String is infallible; unwrap is safe here.
+        #[expect(clippy::unwrap_used, reason = "write! to String cannot fail")]
+        write!(
+            paragraphs,
+            "<p>This is paragraph {} of the test article. It contains enough text \
+            to contribute meaningfully to the readability score that Firefox uses \
+            to determine whether a page can be displayed in reader mode. Each \
+            paragraph needs to be long enough to pass the minimum character threshold \
+            for content scoring. The readability algorithm examines the ratio of text \
+            content to markup and assigns scores to candidate elements based on several \
+            heuristics including paragraph count, text density, and the presence of \
+            semantic HTML elements like article tags. This paragraph is intentionally \
+            verbose to ensure the scoring threshold is met reliably across different \
+            Firefox versions.</p>",
+            i + 1,
+        )
+        .unwrap();
+    }
+    let html = format!(
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">\
+        <title>Article Page</title></head><body>\
+        <article>\
+        <h1>Test Article for Reader Mode</h1>\
+        {paragraphs}\
+        </article></body></html>",
     );
     format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\

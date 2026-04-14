@@ -262,6 +262,11 @@ pub enum CliCommand {
         /// creation with `{ titlePreface: title_prefix }`.
         #[serde(default)]
         title_prefix: Option<String>,
+        /// If `true`, open the window in private/incognito browsing mode.
+        ///
+        /// The extension must be allowed to run in private windows for this to work.
+        #[serde(default)]
+        incognito: bool,
     },
     /// Close an existing browser window.
     CloseWindow {
@@ -339,6 +344,22 @@ pub enum CliCommand {
     /// Unpin a tab.
     UnpinTab {
         /// The ID of the tab to unpin.
+        tab_id: u32,
+    },
+    /// Toggle Reader Mode for a tab.
+    ///
+    /// Firefox-only. Switches the tab into or out of Reader Mode. The tab
+    /// must be displaying a page that Firefox considers reader-mode compatible.
+    ToggleReaderMode {
+        /// The ID of the tab whose Reader Mode to toggle.
+        tab_id: u32,
+    },
+    /// Discard a tab, unloading its content from memory without closing it.
+    ///
+    /// The tab remains in the tab strip but its content is freed. It will be
+    /// reloaded when activated. Cannot discard the active tab.
+    DiscardTab {
+        /// The ID of the tab to discard.
         tab_id: u32,
     },
     /// Warm up a discarded tab, loading its content into memory without activating it.

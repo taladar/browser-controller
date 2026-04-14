@@ -72,7 +72,10 @@ async fn open_close_window_body(h: &Harness) {
 
     // Open a new window
     let open_result = h
-        .send_command(CliCommand::OpenWindow { title_prefix: None })
+        .send_command(CliCommand::OpenWindow {
+            title_prefix: None,
+            incognito: false,
+        })
         .await
         .expect("OpenWindow should succeed");
     let new_window_id = match open_result {

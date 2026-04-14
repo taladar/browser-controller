@@ -743,6 +743,12 @@ pub enum WindowsCommand {
         /// without opening a new window. Requires `--title-prefix`.
         #[clap(long, requires = "title_prefix")]
         if_title_prefix_does_not_exist: bool,
+        /// Open the window in private/incognito browsing mode.
+        ///
+        /// The extension must be allowed to run in private windows for tabs in the
+        /// new window to be controllable.
+        #[clap(long)]
+        incognito: bool,
     },
     /// Close one or more browser windows.
     Close {
@@ -855,6 +861,23 @@ pub enum TabsCommand {
     /// Unpin one or more tabs.
     Unpin {
         /// Criteria selecting the tab(s) to unpin.
+        #[clap(flatten)]
+        tab: TabMatcher,
+    },
+    /// Toggle Reader Mode for one or more tabs.
+    ///
+    /// Firefox-only. The tab must be displaying a reader-mode-compatible page.
+    ToggleReaderMode {
+        /// Criteria selecting the tab(s) to toggle.
+        #[clap(flatten)]
+        tab: TabMatcher,
+    },
+    /// Discard one or more tabs, unloading their content from memory without closing them.
+    ///
+    /// The tabs remain in the tab strip but their content is freed. They will be
+    /// reloaded when activated. The active tab cannot be discarded.
+    Discard {
+        /// Criteria selecting the tab(s) to discard.
         #[clap(flatten)]
         tab: TabMatcher,
     },
@@ -1996,6 +2019,7 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
             WindowsCommand::Open {
                 title_prefix,
                 if_title_prefix_does_not_exist,
+                incognito,
             } => {
                 // Guard: skip opening if a window with the required prefix already exists.
                 if if_title_prefix_does_not_exist && let Some(ref required_prefix) = title_prefix {
@@ -2015,7 +2039,10 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 }
                 let result = send_command(
                     &instance.socket_path,
-                    CliCommand::OpenWindow { title_prefix },
+                    CliCommand::OpenWindow {
+                        title_prefix,
+                        incognito,
+                    },
                 )
                 .await?;
                 print_result(&result, cli.output)?;
@@ -2167,6 +2194,26 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 for tab_id in tab_ids {
                     let result =
                         send_command(&instance.socket_path, CliCommand::UnpinTab { tab_id })
+                            .await?;
+                    print_result(&result, cli.output)?;
+                }
+            }
+            TabsCommand::ToggleReaderMode { tab } => {
+                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                for tab_id in tab_ids {
+                    let result = send_command(
+                        &instance.socket_path,
+                        CliCommand::ToggleReaderMode { tab_id },
+                    )
+                    .await?;
+                    print_result(&result, cli.output)?;
+                }
+            }
+            TabsCommand::Discard { tab } => {
+                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                for tab_id in tab_ids {
+                    let result =
+                        send_command(&instance.socket_path, CliCommand::DiscardTab { tab_id })
                             .await?;
                     print_result(&result, cli.output)?;
                 }

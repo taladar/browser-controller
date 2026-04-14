@@ -94,7 +94,8 @@ fn build_firefox_capabilities(profile_path: &std::path::Path) -> CapabilitiesReq
             "browser.startup.homepage_override.mstone": "ignore",
             "datareporting.policy.dataSubmissionEnabled": false,
             "toolkit.telemetry.reportingpolicy.firstRun": false,
-            "extensions.autoDisableScopes": 0
+            "extensions.autoDisableScopes": 0,
+            "media.autoplay.default": 0
         }
     });
 
