@@ -39,7 +39,8 @@ async fn open_test_tab(h: &Harness, window_id: u32) -> u32 {
             insert_before_tab_id: None,
             insert_after_tab_id: None,
             url: Some("about:blank".to_owned()),
-            strip_credentials: false,
+            username: None,
+            password: None,
             background: false,
         })
         .await

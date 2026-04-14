@@ -162,7 +162,8 @@ async fn cli_tabs_sort_body(h: &Harness) {
                 insert_before_tab_id: None,
                 insert_after_tab_id: None,
                 url: Some((*url).to_owned()),
-                strip_credentials: false,
+                username: None,
+                password: None,
                 background: true,
             })
             .await

@@ -71,7 +71,8 @@ async fn open_close_tab_body(h: &Harness) {
             insert_before_tab_id: None,
             insert_after_tab_id: None,
             url: Some("about:blank".to_owned()),
-            strip_credentials: false,
+            username: None,
+            password: None,
             background: false,
         })
         .await
@@ -136,7 +137,8 @@ async fn navigate_tab_body(h: &Harness) {
             insert_before_tab_id: None,
             insert_after_tab_id: None,
             url: Some("about:blank".to_owned()),
-            strip_credentials: false,
+            username: None,
+            password: None,
             background: false,
         })
         .await

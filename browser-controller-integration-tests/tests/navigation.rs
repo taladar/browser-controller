@@ -48,7 +48,8 @@ async fn go_back_forward_body(h: &Harness) {
             insert_before_tab_id: None,
             insert_after_tab_id: None,
             url: Some(url1.to_owned()),
-            strip_credentials: false,
+            username: None,
+            password: None,
             background: false,
         })
         .await

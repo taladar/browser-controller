@@ -13,7 +13,8 @@
     "nativeMessaging",
     "scripting",
     "tabs",
-    "webRequest"
+    "webRequest",
+    "webRequestAuthProvider"
   ],
   "host_permissions": [
     "<all_urls>"

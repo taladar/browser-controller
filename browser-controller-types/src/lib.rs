@@ -295,14 +295,20 @@ pub enum CliCommand {
         insert_after_tab_id: Option<u32>,
         /// The URL to load in the new tab, or the browser's default new-tab page if absent.
         url: Option<String>,
-        /// If `true`, after the tab finishes loading the extension strips any `user:password@`
-        /// credentials from the URL and navigates to the clean URL.
+        /// Optional username for HTTP authentication.
         ///
-        /// This causes Firefox to cache the credentials (satisfying future auth challenges
-        /// automatically) while leaving the tab displaying the URL without embedded credentials.
-        /// Requires `url` to be set; ignored when `url` is absent.
+        /// When set (together with `password`), the extension opens the URL without
+        /// embedded credentials and responds to the server's 401 challenge via the
+        /// `webRequest.onAuthRequired` API, injecting the credentials into the browser's
+        /// built-in authentication cache. Subsequent requests to the same realm reuse the
+        /// cached credentials automatically. Requires `url` to be set.
         #[serde(default)]
-        strip_credentials: bool,
+        username: Option<String>,
+        /// Optional password for HTTP authentication.
+        ///
+        /// Used together with `username`. Requires `url` to be set.
+        #[serde(default)]
+        password: Option<String>,
         /// If `true`, the new tab is created in the background and the currently active tab
         /// in the window remains active.
         #[serde(default)]

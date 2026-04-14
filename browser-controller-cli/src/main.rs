@@ -782,21 +782,29 @@ pub enum TabsCommand {
         /// URL to load in the new tab (defaults to the browser's new-tab page).
         #[clap(long)]
         url: Option<String>,
-        /// After the tab finishes loading, strip any embedded `user:password@` credentials
-        /// from the URL and navigate to the clean URL.
+        /// Username for HTTP authentication.
         ///
-        /// Firefox caches the credentials from the initial load and uses them to satisfy
-        /// future auth challenges automatically, while the tab ends up displaying the URL
-        /// without visible credentials. Requires `--url`.
+        /// When provided together with `--password-env`, the extension strips any embedded
+        /// credentials from the URL and provides the given username/password to the server's
+        /// 401 challenge via the browser's `onAuthRequired` API. The browser caches the
+        /// credentials for the realm, so subsequent requests work automatically.
+        /// Requires `--url`.
         #[clap(long, requires = "url")]
-        strip_credentials: bool,
+        username: Option<String>,
+        /// Name of an environment variable containing the password for HTTP authentication.
+        ///
+        /// The password is read from this environment variable instead of being passed
+        /// directly on the command line, to avoid exposing it in process listings.
+        /// Requires `--url` and `--username`.
+        #[clap(long, requires_all = ["url", "username"])]
+        password_env: Option<String>,
         /// Open the new tab in the background, keeping the currently active tab focused.
         #[clap(long)]
         background: bool,
         /// Only open the tab if no existing tab in any window has a URL matching `--url`.
         ///
         /// The comparison strips `user:password@` credentials from both sides before comparing,
-        /// so a tab previously opened with `--strip-credentials` is still considered a match.
+        /// so a tab previously opened with `--username` is still considered a match.
         /// If a matching tab already exists the command succeeds silently without opening a new tab.
         /// Requires `--url`.
         #[clap(long, requires = "url")]
@@ -2030,7 +2038,8 @@ async fn do_stuff() -> Result<(), Error> {
                 before,
                 after,
                 url,
-                strip_credentials,
+                username,
+                password_env,
                 background,
                 if_url_does_not_exist,
             } => {
@@ -2052,6 +2061,17 @@ async fn do_stuff() -> Result<(), Error> {
                         return Ok(());
                     }
                 }
+                // Resolve the password from the environment variable if specified.
+                let password = password_env
+                    .map(|env_name| {
+                        std::env::var(&env_name).map_err(|_not_set| {
+                            Error::CommandFailed(format!(
+                                "environment variable {env_name} is not set"
+                            ))
+                        })
+                    })
+                    .transpose()?;
+
                 let window_ids = resolve_windows(&instance.socket_path, &window).await?;
                 for window_id in window_ids {
                     let result = send_command(
@@ -2061,7 +2081,8 @@ async fn do_stuff() -> Result<(), Error> {
                             insert_before_tab_id: before,
                             insert_after_tab_id: after,
                             url: url.clone(),
-                            strip_credentials,
+                            username: username.clone(),
+                            password: password.clone(),
                             background,
                         },
                     )

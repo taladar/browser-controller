@@ -43,6 +43,16 @@ const MAX_RECONNECT_DELAY_MS = 30_000;
 /** Tabs currently awaiting basic HTTP authentication (tracked via webRequest). */
 const pendingAuthTabs = new Set();
 
+/**
+ * Pending credentials for tabs opened with username/password.
+ *
+ * Maps `tabId` → `{ username, password }`. The `onAuthRequired` listener
+ * provides these credentials to the browser's HTTP auth challenge, then
+ * removes the entry so the browser's built-in credential cache takes over
+ * for subsequent requests.
+ */
+const pendingCredentials = new Map();
+
 
 /** Active port to the native messaging host (null when disconnected). */
 let nativePort = null;
@@ -76,9 +86,20 @@ browser.webRequest.onAuthRequired.addListener(
   (details) => {
     if (details.tabId >= 0) {
       pendingAuthTabs.add(details.tabId);
+
+      // If we have pending credentials for this tab, provide them to the
+      // browser and remove the entry. The browser caches the credentials
+      // internally for the realm, so future requests are handled automatically.
+      const creds = pendingCredentials.get(details.tabId);
+      if (creds) {
+        pendingCredentials.delete(details.tabId);
+        return { authCredentials: creds };
+      }
     }
+    return {};
   },
   { urls: ["<all_urls>"] },
+  ["blocking"],
 );
 
 browser.webRequest.onCompleted.addListener(
@@ -344,7 +365,8 @@ async function dispatch(commandType, params) {
         params.insert_before_tab_id ?? null,
         params.insert_after_tab_id ?? null,
         params.url ?? null,
-        params.strip_credentials ?? false,
+        params.username ?? null,
+        params.password ?? null,
         params.background ?? false,
       );
     case "ActivateTab":
@@ -486,8 +508,15 @@ async function waitForTabComplete(tabId) {
   });
 }
 
-/** Opens a new tab and returns its details. */
-async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, stripCredentials, background) {
+/** Opens a new tab and returns its details.
+ *
+ * When `username` and `password` are provided, any embedded credentials in the
+ * URL are stripped and the credentials are stored in `pendingCredentials` so
+ * the `onAuthRequired` listener can provide them to the browser's auth
+ * challenge. The browser then caches the credentials for the realm, so
+ * subsequent requests work automatically.
+ */
+async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, username, password, background) {
   const createProps = { windowId, active: !background };
   if (insertBeforeTabId !== null) {
     const refTab = await browser.tabs.get(insertBeforeTabId);
@@ -496,10 +525,27 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, st
     const refTab = await browser.tabs.get(insertAfterTabId);
     createProps.index = refTab.index + 1;
   }
-  if (url !== null) {
-    createProps.url = url;
+
+  // If credentials are provided, ensure the URL does not contain them and
+  // register the credentials for the onAuthRequired listener.
+  let cleanUrl = url;
+  if (url !== null && username !== null && password !== null) {
+    const parsed = new URL(url);
+    parsed.username = "";
+    parsed.password = "";
+    cleanUrl = parsed.href;
+  }
+
+  if (cleanUrl !== null) {
+    createProps.url = cleanUrl;
   }
   let tab = await browser.tabs.create(createProps);
+
+  // Store credentials so the onAuthRequired listener can provide them when
+  // the server responds with a 401 challenge.
+  if (username !== null && password !== null) {
+    pendingCredentials.set(tab.id, { username, password });
+  }
 
   // On Wayland, the compositor may block Firefox's attempt to activate the target
   // window during tabs.create, causing Firefox to fall back to the active window.
@@ -516,19 +562,17 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, st
     }
     const moved = await browser.tabs.move(tab.id, { windowId, index: moveIndex });
     tab = Array.isArray(moved) ? moved[0] : moved;
+    // If the tab was moved, re-register credentials under the same tab ID
+    // (tabs.move does not change the tab ID).
   }
 
-  if (stripCredentials && url !== null) {
-    const parsed = new URL(url);
-    if (parsed.username !== "" || parsed.password !== "") {
-      parsed.username = "";
-      parsed.password = "";
-      const cleanUrl = parsed.href;
-      await waitForTabComplete(tab.id);
-      await browser.tabs.update(tab.id, { url: cleanUrl });
-      await waitForTabComplete(tab.id);
-      tab = await browser.tabs.get(tab.id);
-    }
+  // Wait for the page to finish loading (which includes the auth exchange)
+  // before returning tab details, so the caller sees the final URL.
+  if (username !== null && password !== null) {
+    await waitForTabComplete(tab.id);
+    tab = await browser.tabs.get(tab.id);
+    // Clean up credentials in case auth was never challenged (e.g. no 401)
+    pendingCredentials.delete(tab.id);
   }
 
   return { type: "Tab", ...await serializeTabDetails(tab) };
