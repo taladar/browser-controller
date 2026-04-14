@@ -881,6 +881,15 @@ pub enum TabsCommand {
         #[clap(long)]
         url: String,
     },
+    /// Reload one or more tabs.
+    Reload {
+        /// Criteria selecting the tab(s) to reload.
+        #[clap(flatten)]
+        tab: TabMatcher,
+        /// Bypass the browser cache (hard refresh).
+        #[clap(long)]
+        bypass_cache: bool,
+    },
     /// Close one or more tabs.
     Close {
         /// Criteria selecting the tab(s) to close.
@@ -2545,6 +2554,20 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                         CliCommand::NavigateTab {
                             tab_id,
                             url: url.clone(),
+                        },
+                    )
+                    .await?;
+                    print_result(&result, cli.output)?;
+                }
+            }
+            TabsCommand::Reload { tab, bypass_cache } => {
+                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                for tab_id in tab_ids {
+                    let result = send_command(
+                        &instance.socket_path,
+                        CliCommand::ReloadTab {
+                            tab_id,
+                            bypass_cache,
                         },
                     )
                     .await?;

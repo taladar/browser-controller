@@ -423,6 +423,8 @@ async function dispatch(commandType, params) {
       return cmdGoBack(params.tab_id, params.steps);
     case "GoForward":
       return cmdGoForward(params.tab_id, params.steps);
+    case "ReloadTab":
+      return cmdReloadTab(params.tab_id, params.bypass_cache ?? false);
     case "CloseTab":
       return cmdCloseTab(params.tab_id);
     case "PinTab":
@@ -820,6 +822,13 @@ async function cmdGoBack(tabId, steps) {
  */
 async function cmdGoForward(tabId, steps) {
   return navigateHistory(tabId, steps);
+}
+
+/** Reloads a tab, optionally bypassing the cache. */
+async function cmdReloadTab(tabId, bypassCache) {
+  await browser.tabs.reload(tabId, { bypassCache });
+  const tab = await browser.tabs.get(tabId);
+  return { type: "Tab", ...await serializeTabDetails(tab) };
 }
 
 /** Navigates an existing tab to a new URL and returns its updated details. */

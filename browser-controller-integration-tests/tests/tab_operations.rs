@@ -377,3 +377,78 @@ async fn discard_warmup_firefox() {
 async fn discard_warmup_chrome() {
     harness::run(browser::Kind::Chrome, |h| Box::pin(discard_warmup_body(h))).await;
 }
+
+/// Shared reload test body.
+#[expect(
+    clippy::panic,
+    reason = "test assertions use panic on unexpected variants"
+)]
+async fn reload_tab_body(h: &Harness) {
+    let server = test_server::Server::start_plain();
+    let window_id = first_window_id(h).await;
+    let tab_id = open_test_tab(h, window_id).await;
+
+    // Navigate to a real page first
+    h.send_command(CliCommand::NavigateTab {
+        tab_id,
+        url: server.base_url(),
+    })
+    .await
+    .expect("NavigateTab should succeed");
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Normal reload
+    let result = h
+        .send_command(CliCommand::ReloadTab {
+            tab_id,
+            bypass_cache: false,
+        })
+        .await
+        .expect("ReloadTab should succeed");
+    match &result {
+        CliResult::Tab(details) => {
+            pretty_assertions::assert_eq!(details.id, tab_id);
+            assert!(
+                details.url.starts_with(&server.base_url()),
+                "URL should still be the test server after reload, got {}",
+                details.url,
+            );
+        }
+        other => panic!("expected Tab, got {other:?}"),
+    }
+
+    // Force reload (bypass cache)
+    let result = h
+        .send_command(CliCommand::ReloadTab {
+            tab_id,
+            bypass_cache: true,
+        })
+        .await
+        .expect("ReloadTab with bypass_cache should succeed");
+    match &result {
+        CliResult::Tab(details) => {
+            pretty_assertions::assert_eq!(details.id, tab_id);
+            assert!(
+                details.url.starts_with(&server.base_url()),
+                "URL should still be the test server after force reload, got {}",
+                details.url,
+            );
+        }
+        other => panic!("expected Tab, got {other:?}"),
+    }
+
+    // Cleanup
+    h.send_command(CliCommand::CloseTab { tab_id })
+        .await
+        .expect("CloseTab should succeed");
+}
+
+#[tokio::test]
+async fn reload_tab_firefox() {
+    harness::run(browser::Kind::Firefox, |h| Box::pin(reload_tab_body(h))).await;
+}
+
+#[tokio::test]
+async fn reload_tab_chrome() {
+    harness::run(browser::Kind::Chrome, |h| Box::pin(reload_tab_body(h))).await;
+}

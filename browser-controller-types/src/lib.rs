@@ -448,6 +448,14 @@ pub enum CliCommand {
         /// The URL to load in the tab.
         url: String,
     },
+    /// Reload a tab.
+    ReloadTab {
+        /// The ID of the tab to reload.
+        tab_id: u32,
+        /// If `true`, bypass the browser cache (hard refresh).
+        #[serde(default)]
+        bypass_cache: bool,
+    },
     /// Close a tab.
     CloseTab {
         /// The ID of the tab to close.
