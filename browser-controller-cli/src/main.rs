@@ -6,10 +6,9 @@
 use std::time::Duration;
 
 use browser_controller_client::{
-    CliCommand, CliRequest, CliResult, Client, CookieStoreId, DiscoveredInstance, DownloadId,
-    OpenTabParams, TabId, TabStatus, WindowId, WindowState,
+    CliResult, Client, CookieStoreId, DiscoveredInstance, DownloadId, OpenTabParams, TabId,
+    TabStatus, WindowId, WindowState,
 };
-use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
 use tracing_subscriber::{
     EnvFilter, Layer as _, Registry, filter::LevelFilter, layer::SubscriberExt as _,
     util::SubscriberInitExt as _,
@@ -1250,8 +1249,10 @@ fn print_result(result: &CliResult, format: OutputFormat) -> Result<(), Error> {
 
 /// Connect to a mediator and stream browser events as newline-delimited JSON to stdout.
 ///
-/// Sends `SubscribeEvents` and then reads `BrowserEvent` JSON lines from the socket,
-/// printing each to stdout. Runs until the connection closes or an error occurs.
+/// Subscribes to events via [`Client::subscribe_events_filtered`] and then
+/// prints each event as a JSON line to stdout. Filtering is performed
+/// server-side by the mediator, so every event received is printed.
+/// Runs until the connection closes or an error occurs.
 ///
 /// # Errors
 ///
@@ -1261,60 +1262,15 @@ fn print_result(result: &CliResult, format: OutputFormat) -> Result<(), Error> {
     reason = "event stream output goes to stdout by design"
 )]
 async fn stream_events(
-    socket_path: &std::path::Path,
+    client: &Client,
     filter_downloads: bool,
     filter_windows_tabs: bool,
 ) -> Result<(), Error> {
-    // When neither filter is set, show all events (backward compatible).
-    let show_all = !filter_downloads && !filter_windows_tabs;
-
-    let request = CliRequest::new(
-        uuid::Uuid::new_v4().to_string(),
-        CliCommand::SubscribeEvents,
-    );
-
-    #[cfg(unix)]
-    let stream = tokio::net::UnixStream::connect(socket_path).await?;
-    #[cfg(windows)]
-    let stream = {
-        let pipe_name = browser_controller_client::discovery::pipe_name_from_marker(socket_path)?;
-        tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name)?
-    };
-
-    let (read_half, mut write_half) = tokio::io::split(stream);
-
-    let mut json = serde_json::to_vec(&request)?;
-    json.push(b'\n');
-    write_half.write_all(&json).await?;
-    // Keep write_half alive until the function returns so the mediator does not
-    // observe EOF on its read half and terminate the stream prematurely.
-    let _write_half = write_half;
-
-    let mut reader = tokio::io::BufReader::new(read_half);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let n = reader.read_line(&mut line).await?;
-        if n == 0 {
-            break; // Mediator closed the connection.
-        }
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            continue;
-        }
-        // Apply event category filter if any flags are set.
-        if !show_all {
-            let is_download_event = trimmed.contains("\"DownloadCreated\"")
-                || trimmed.contains("\"DownloadChanged\"")
-                || trimmed.contains("\"DownloadErased\"");
-            if is_download_event && !filter_downloads {
-                continue;
-            }
-            if !is_download_event && !filter_windows_tabs {
-                continue;
-            }
-        }
-        println!("{trimmed}");
+    let mut events = client
+        .subscribe_events_filtered(filter_windows_tabs, filter_downloads)
+        .await?;
+    while let Some(event) = events.next_event().await? {
+        println!("{}", serde_json::to_string(&event)?);
     }
     Ok(())
 }
@@ -1414,7 +1370,10 @@ async fn do_stuff() -> Result<(), Error> {
         windows_tabs,
     } = &cli.command
     {
-        stream_events(&instance.socket_path, *downloads, *windows_tabs).await?;
+        // Event streaming is long-lived; use a large timeout for the
+        // initial subscribe command but events themselves are unbounded.
+        let client = Client::new(instance.socket_path.clone(), Duration::from_secs(30));
+        stream_events(&client, *downloads, *windows_tabs).await?;
         return Ok(());
     }
 

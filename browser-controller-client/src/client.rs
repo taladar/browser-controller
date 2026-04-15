@@ -599,7 +599,7 @@ impl Client {
     // Events
     // ------------------------------------------------------------------
 
-    /// Subscribe to browser events from the mediator.
+    /// Subscribe to all browser events from the mediator.
     ///
     /// Returns an [`EventStream`] that yields events as they arrive.
     ///
@@ -607,7 +607,23 @@ impl Client {
     ///
     /// Returns an error if the connection or subscribe command fails.
     pub async fn subscribe_events(&self) -> Result<EventStream, Error> {
-        EventStream::open(&self.socket_path).await
+        EventStream::open(&self.socket_path, false, false).await
+    }
+
+    /// Subscribe to browser events with a category filter.
+    ///
+    /// When both `include_windows_tabs` and `include_downloads` are `false`,
+    /// all event categories are delivered (same as [`subscribe_events`](Self::subscribe_events)).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection or subscribe command fails.
+    pub async fn subscribe_events_filtered(
+        &self,
+        include_windows_tabs: bool,
+        include_downloads: bool,
+    ) -> Result<EventStream, Error> {
+        EventStream::open(&self.socket_path, include_windows_tabs, include_downloads).await
     }
 
     // ------------------------------------------------------------------

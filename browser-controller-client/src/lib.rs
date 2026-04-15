@@ -20,9 +20,15 @@
 //! # }
 //! ```
 
-// Re-export all types for convenience so users don't need to depend on
-// browser-controller-types directly.
-pub use browser_controller_types::*;
+// Re-export data types that appear in the public API so users don't need to
+// depend on browser-controller-types directly.  Protocol-internal types
+// (CliCommand, CliRequest, CliResponse, CliOutcome, ExtensionHello,
+// ExtensionMessage) are deliberately excluded.
+pub use browser_controller_types::{
+    BrowserEvent, BrowserInfo, CliResult, ContainerInfo, CookieStoreId, DownloadId, DownloadItem,
+    DownloadState, FilenameConflictAction, TabDetails, TabId, TabStatus, TabSummary, WindowId,
+    WindowState, WindowSummary,
+};
 
 mod client;
 mod discovery;

@@ -216,10 +216,13 @@ where
         };
 
         // SubscribeEvents is handled locally — stream events until the client disconnects.
-        if matches!(
-            &cli_request.command,
-            browser_controller_types::CliCommand::SubscribeEvents
-        ) {
+        if let browser_controller_types::CliCommand::SubscribeEvents {
+            include_windows_tabs,
+            include_downloads,
+        } = &cli_request.command
+        {
+            let include_windows_tabs = *include_windows_tabs;
+            let include_downloads = *include_downloads;
             let mut event_rx = event_tx.subscribe();
             // Spawn a task that signals when the client closes the connection.
             let (disconnect_tx, disconnect_rx) = oneshot::channel::<()>();
@@ -247,6 +250,9 @@ where
                     event = event_rx.recv() => {
                         match event {
                             Ok(ev) => {
+                                if !ev.matches_filter(include_windows_tabs, include_downloads) {
+                                    continue;
+                                }
                                 let mut json = serde_json::to_vec(&ev)?;
                                 json.push(b'\n');
                                 write_half.write_all(&json).await?;

@@ -723,6 +723,40 @@ pub enum BrowserEvent {
     },
 }
 
+impl BrowserEvent {
+    /// Returns `true` if this is a download-related event.
+    #[must_use]
+    pub const fn is_download_event(&self) -> bool {
+        matches!(
+            self,
+            Self::DownloadCreated { .. }
+                | Self::DownloadChanged { .. }
+                | Self::DownloadErased { .. }
+        )
+    }
+
+    /// Returns `true` if this event passes the given subscription filter.
+    ///
+    /// When both `include_windows_tabs` and `include_downloads` are `false`,
+    /// all events pass (backward compatible "no filter" mode).
+    #[must_use]
+    pub const fn matches_filter(
+        &self,
+        include_windows_tabs: bool,
+        include_downloads: bool,
+    ) -> bool {
+        // No filter flags → deliver everything.
+        if !include_windows_tabs && !include_downloads {
+            return true;
+        }
+        if self.is_download_event() {
+            include_downloads
+        } else {
+            include_windows_tabs
+        }
+    }
+}
+
 /// A command sent from the CLI to the mediator, and forwarded to the extension.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -900,7 +934,20 @@ pub enum CliCommand {
     /// After sending this command the mediator streams [`BrowserEvent`] objects as
     /// newline-delimited JSON on the same connection until the client disconnects.
     /// No [`CliResponse`] is sent; events arrive directly as [`BrowserEvent`] JSON.
-    SubscribeEvents,
+    ///
+    /// When both `include_windows_tabs` and `include_downloads` are `false`
+    /// (the default), all event categories are delivered (backward compatible).
+    SubscribeEvents {
+        /// Include window and tab events (`WindowOpened`, `WindowClosed`,
+        /// `TabOpened`, `TabClosed`, `TabActivated`, `TabNavigated`,
+        /// `TabTitleChanged`, `TabStatusChanged`).
+        #[serde(default)]
+        include_windows_tabs: bool,
+        /// Include download events (`DownloadCreated`, `DownloadChanged`,
+        /// `DownloadErased`).
+        #[serde(default)]
+        include_downloads: bool,
+    },
     /// List all Firefox containers (contextual identities).
     ///
     /// Returns an empty list on browsers that don't support containers.

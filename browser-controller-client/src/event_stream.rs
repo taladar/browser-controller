@@ -26,15 +26,23 @@ pub struct EventStream {
 impl EventStream {
     /// Open a new event subscription to the mediator.
     ///
-    /// Sends `SubscribeEvents` and returns a handle for reading events.
+    /// When both `include_windows_tabs` and `include_downloads` are `false`,
+    /// all event categories are delivered (backward compatible).
     ///
     /// # Errors
     ///
     /// Returns an error if the socket connection or command send fails.
-    pub async fn open(socket_path: &Path) -> Result<Self, Error> {
+    pub async fn open(
+        socket_path: &Path,
+        include_windows_tabs: bool,
+        include_downloads: bool,
+    ) -> Result<Self, Error> {
         let request = CliRequest::new(
             uuid::Uuid::new_v4().to_string(),
-            CliCommand::SubscribeEvents,
+            CliCommand::SubscribeEvents {
+                include_windows_tabs,
+                include_downloads,
+            },
         );
 
         let stream = UnixStream::connect(socket_path).await?;
