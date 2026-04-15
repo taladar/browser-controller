@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Information about a running browser instance.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrowserInfo {
     /// Human-readable browser name (e.g. "Firefox", "Chrome").
@@ -28,7 +29,28 @@ pub struct BrowserInfo {
     pub profile_id: Option<String>,
 }
 
+impl BrowserInfo {
+    /// Create a new `BrowserInfo`.
+    #[must_use]
+    pub const fn new(
+        browser_name: String,
+        browser_vendor: Option<String>,
+        browser_version: String,
+        pid: u32,
+        profile_id: Option<String>,
+    ) -> Self {
+        Self {
+            browser_name,
+            browser_vendor,
+            browser_version,
+            pid,
+            profile_id,
+        }
+    }
+}
+
 /// The visual state of a browser window.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowState {
@@ -43,6 +65,7 @@ pub enum WindowState {
 }
 
 /// A brief summary of a tab, suitable for embedding in window listings.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabSummary {
     /// The browser-assigned tab ID.
@@ -67,7 +90,32 @@ pub struct TabSummary {
     pub container_name: Option<String>,
 }
 
+impl TabSummary {
+    /// Create a new `TabSummary`.
+    #[must_use]
+    pub const fn new(
+        id: u32,
+        index: u32,
+        title: String,
+        url: String,
+        is_active: bool,
+        cookie_store_id: Option<String>,
+        container_name: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            index,
+            title,
+            url,
+            is_active,
+            cookie_store_id,
+            container_name,
+        }
+    }
+}
+
 /// A summary of a browser window including its tabs.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowSummary {
     /// The window's unique identifier within the browser.
@@ -91,7 +139,32 @@ pub struct WindowSummary {
     pub tabs: Vec<TabSummary>,
 }
 
+impl WindowSummary {
+    /// Create a new `WindowSummary`.
+    #[must_use]
+    pub const fn new(
+        id: u32,
+        title: String,
+        title_prefix: Option<String>,
+        is_focused: bool,
+        is_last_focused: bool,
+        state: WindowState,
+        tabs: Vec<TabSummary>,
+    ) -> Self {
+        Self {
+            id,
+            title,
+            title_prefix,
+            is_focused,
+            is_last_focused,
+            state,
+            tabs,
+        }
+    }
+}
+
 /// The loading status of a tab.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TabStatus {
@@ -102,6 +175,7 @@ pub enum TabStatus {
 }
 
 /// The state of a download.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DownloadState {
@@ -124,6 +198,7 @@ impl std::fmt::Display for DownloadState {
 }
 
 /// How to handle filename conflicts when downloading.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FilenameConflictAction {
@@ -146,6 +221,7 @@ impl std::fmt::Display for FilenameConflictAction {
 }
 
 /// Details about a download.
+#[non_exhaustive]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "DownloadItem mirrors the browser's DownloadItem API, which exposes each state as a separate boolean property"
@@ -187,7 +263,56 @@ pub struct DownloadItem {
     pub incognito: bool,
 }
 
+impl DownloadItem {
+    /// Create a new `DownloadItem`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the browser's DownloadItem API fields"
+    )]
+    #[expect(
+        clippy::fn_params_excessive_bools,
+        reason = "mirrors the browser's DownloadItem API booleans"
+    )]
+    #[must_use]
+    pub const fn new(
+        id: u32,
+        url: String,
+        filename: String,
+        state: DownloadState,
+        bytes_received: u64,
+        total_bytes: i64,
+        file_size: i64,
+        error: Option<String>,
+        start_time: String,
+        end_time: Option<String>,
+        paused: bool,
+        can_resume: bool,
+        exists: bool,
+        mime: Option<String>,
+        incognito: bool,
+    ) -> Self {
+        Self {
+            id,
+            url,
+            filename,
+            state,
+            bytes_received,
+            total_bytes,
+            file_size,
+            error,
+            start_time,
+            end_time,
+            paused,
+            can_resume,
+            exists,
+            mime,
+            incognito,
+        }
+    }
+}
+
 /// Full details about a browser tab.
+#[non_exhaustive]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "TabDetails mirrors the Firefox tabs.Tab API, which exposes each state as a separate boolean property"
@@ -275,7 +400,68 @@ pub struct TabDetails {
     pub container_name: Option<String>,
 }
 
+impl TabDetails {
+    /// Create a new `TabDetails`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the Firefox tabs.Tab API fields"
+    )]
+    #[expect(
+        clippy::fn_params_excessive_bools,
+        reason = "mirrors the Firefox tabs.Tab API booleans"
+    )]
+    #[must_use]
+    pub const fn new(
+        id: u32,
+        index: u32,
+        window_id: u32,
+        title: String,
+        url: String,
+        is_active: bool,
+        is_pinned: bool,
+        is_discarded: bool,
+        is_audible: bool,
+        is_muted: bool,
+        status: TabStatus,
+        has_attention: bool,
+        is_awaiting_auth: bool,
+        is_in_reader_mode: bool,
+        incognito: bool,
+        history_length: u32,
+        history_steps_back: Option<u32>,
+        history_steps_forward: Option<u32>,
+        history_hidden_count: Option<u32>,
+        cookie_store_id: Option<String>,
+        container_name: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            index,
+            window_id,
+            title,
+            url,
+            is_active,
+            is_pinned,
+            is_discarded,
+            is_audible,
+            is_muted,
+            status,
+            has_attention,
+            is_awaiting_auth,
+            is_in_reader_mode,
+            incognito,
+            history_length,
+            history_steps_back,
+            history_steps_forward,
+            history_hidden_count,
+            cookie_store_id,
+            container_name,
+        }
+    }
+}
+
 /// Information about a Firefox container (contextual identity).
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainerInfo {
     /// The cookie store ID (e.g. `"firefox-container-1"`).
@@ -290,7 +476,28 @@ pub struct ContainerInfo {
     pub icon: String,
 }
 
+impl ContainerInfo {
+    /// Create a new `ContainerInfo`.
+    #[must_use]
+    pub const fn new(
+        cookie_store_id: String,
+        name: String,
+        color: String,
+        color_code: String,
+        icon: String,
+    ) -> Self {
+        Self {
+            cookie_store_id,
+            name,
+            color,
+            color_code,
+            icon,
+        }
+    }
+}
+
 /// An event emitted by the browser extension and broadcast to all event-stream subscribers.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum BrowserEvent {
@@ -399,6 +606,7 @@ pub enum BrowserEvent {
 }
 
 /// A command sent from the CLI to the mediator, and forwarded to the extension.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum CliCommand {
@@ -649,6 +857,7 @@ pub enum CliCommand {
 }
 
 /// A request sent from the CLI to the mediator.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CliRequest {
     /// A unique identifier (UUID v4 string) used to correlate requests with responses.
@@ -661,7 +870,19 @@ pub struct CliRequest {
     pub command: CliCommand,
 }
 
+impl CliRequest {
+    /// Create a new `CliRequest`.
+    #[must_use]
+    pub const fn new(request_id: String, command: CliCommand) -> Self {
+        Self {
+            request_id,
+            command,
+        }
+    }
+}
+
 /// The result payload of a successful command.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum CliResult {
@@ -704,6 +925,7 @@ pub enum CliResult {
 }
 
 /// The outcome of a command: either a successful result or an error message.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", content = "data", rename_all = "lowercase")]
 pub enum CliOutcome {
@@ -714,6 +936,7 @@ pub enum CliOutcome {
 }
 
 /// A response sent from the mediator to the CLI.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CliResponse {
     /// The request ID from the corresponding [`CliRequest`].
@@ -722,7 +945,19 @@ pub struct CliResponse {
     pub outcome: CliOutcome,
 }
 
+impl CliResponse {
+    /// Create a new `CliResponse`.
+    #[must_use]
+    pub const fn new(request_id: String, outcome: CliOutcome) -> Self {
+        Self {
+            request_id,
+            outcome,
+        }
+    }
+}
+
 /// Initial hello message sent from the Firefox extension to the mediator upon connection.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionHello {
     /// The name of the browser (e.g. "Firefox").
@@ -736,7 +971,24 @@ pub struct ExtensionHello {
     pub browser_version: String,
 }
 
+impl ExtensionHello {
+    /// Create a new `ExtensionHello`.
+    #[must_use]
+    pub const fn new(
+        browser_name: String,
+        browser_vendor: Option<String>,
+        browser_version: String,
+    ) -> Self {
+        Self {
+            browser_name,
+            browser_vendor,
+            browser_version,
+        }
+    }
+}
+
 /// A message received by the mediator from the Firefox extension via native messaging.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "message_type")]
 pub enum ExtensionMessage {

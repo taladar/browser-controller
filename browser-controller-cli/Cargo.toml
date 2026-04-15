@@ -47,14 +47,11 @@ name = "browser-controller"
 path = "src/main.rs"
 
 [dependencies]
-browser-controller-types = { workspace = true }
+browser-controller-client = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 clap_mangen = { workspace = true }
-directories = { workspace = true }
-fs-err = { workspace = true }
 log-panics = { workspace = true }
-regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

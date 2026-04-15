@@ -134,15 +134,12 @@ dependencies = [
 name = "browser-controller-cli"
 version = "0.1.5"
 dependencies = [
- "browser-controller-types",
+ "browser-controller-client",
  "clap",
  "clap_complete",
  "clap_mangen",
- "directories",
- "fs-err",
  "log-panics",
  "pretty_assertions",
- "regex",
  "serde",
  "serde_json",
  "thiserror",
@@ -157,9 +154,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "browser-controller-client"
+version = "0.1.5"
+dependencies = [
+ "browser-controller-types",
+ "directories",
+ "fs-err",
+ "pretty_assertions",
+ "regex",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+ "winreg",
+]
+
+[[package]]
 name = "browser-controller-integration-tests"
 version = "0.0.0"
 dependencies = [
+ "browser-controller-client",
  "browser-controller-types",
  "fs-err",
  "futures",
@@ -171,7 +189,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
- "uuid",
  "webdriverbidi",
  "which",
 ]
@@ -180,6 +197,7 @@ dependencies = [
 name = "browser-controller-mediator"
 version = "0.1.5"
 dependencies = [
+ "browser-controller-client",
  "browser-controller-types",
  "directories",
  "fs-err",

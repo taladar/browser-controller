@@ -1,0 +1,37 @@
+[package]
+name = "browser-controller-client"
+description = "Async Rust client library for controlling browsers via the browser-controller mediator"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["browser", "automation", "firefox", "chrome", "tabs"]
+categories = ["api-bindings"]
+exclude = [".env", "cliff.toml", "tarpaulin-report.html", "tarpaulin-report.json"]
+
+[dependencies]
+browser-controller-types = { workspace = true }
+directories = { workspace = true }
+fs-err = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sysinfo = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = "2.5.8"
+uuid = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.56"
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

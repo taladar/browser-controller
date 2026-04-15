@@ -1,5 +1,5 @@
 [workspace]
-members = ["browser-controller-cli", "browser-controller-integration-tests", "browser-controller-mediator", "browser-controller-types"]
+members = ["browser-controller-cli", "browser-controller-client", "browser-controller-integration-tests", "browser-controller-mediator", "browser-controller-types"]
 resolver = "3"
 
 [workspace.package]
@@ -12,6 +12,7 @@ publish = true
 repository = "https://github.com/taladar/browser-controller"
 
 [workspace.dependencies]
+browser-controller-client = { path = "browser-controller-client", version = "0.1.5" }
 browser-controller-types = { path = "browser-controller-types", version = "0.1.5" }
 clap = { version = "4.6.0", features = ["derive", "cargo"] }
 clap_complete = "4.6.0"

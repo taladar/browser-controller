@@ -47,6 +47,7 @@ name = "browser-controller-mediator"
 path = "src/main.rs"
 
 [dependencies]
+browser-controller-client = { workspace = true }
 browser-controller-types = { workspace = true }
 directories = { workspace = true }
 fs-err = { workspace = true }

@@ -8,6 +8,7 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [dependencies]
+browser-controller-client = { workspace = true }
 browser-controller-types = { path = "../browser-controller-types" }
 fs-err = { workspace = true }
 futures = "0.3"
@@ -18,7 +19,6 @@ tempfile = "3"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-uuid = { workspace = true }
 webdriverbidi = "0.2.2"
 which = "7"
 

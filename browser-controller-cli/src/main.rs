@@ -5,23 +5,22 @@
 
 use std::time::Duration;
 
-use browser_controller_types::{
-    BrowserInfo, CliCommand, CliOutcome, CliRequest, CliResponse, CliResult, TabDetails, TabStatus,
-    WindowState, WindowSummary,
+use browser_controller_client::{
+    CliCommand, CliRequest, CliResult, Client, DiscoveredInstance, TabStatus, WindowState,
 };
-use regex::Regex;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
 use tracing_subscriber::{
     EnvFilter, Layer as _, Registry, filter::LevelFilter, layer::SubscriberExt as _,
     util::SubscriberInitExt as _,
 };
 
-/// Timeout for connecting to and querying a single mediator instance during discovery.
-const INSTANCE_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
-
 /// Errors that can occur in the CLI.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// An error from the client library.
+    #[error("client error: {0}")]
+    Client(#[from] browser_controller_client::Error),
+
     /// An I/O error occurred (covers both network and filesystem operations).
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -30,45 +29,10 @@ pub enum Error {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    /// A background task panicked or was cancelled.
-    #[error("background task error: {0}")]
-    JoinError(#[from] tokio::task::JoinError),
-
-    /// The runtime/temp directory cannot be determined.
-    #[error("cannot determine runtime/temp directory for IPC sockets")]
-    NoRuntimeDir,
-
     /// Writing a Windows registry key for native messaging host registration failed.
     #[cfg(target_os = "windows")]
     #[error("failed to write Windows registry key: {0}")]
     RegistryWriteFailed(#[source] std::io::Error),
-
-    /// No running mediator instance was found.
-    #[error("no browser-controller mediator is running (no sockets in {dir})")]
-    NoInstances {
-        /// The directory that was searched.
-        dir: std::path::PathBuf,
-    },
-
-    /// Multiple instances are running and no selector was provided.
-    #[error(
-        "multiple browser instances are running; use --instance <pid|browser-name> to select one"
-    )]
-    MultipleInstances,
-
-    /// The specified instance selector matched no running instance.
-    #[error("no browser instance matches '{selector}'")]
-    NoMatchingInstance {
-        /// The selector that was provided.
-        selector: String,
-    },
-
-    /// The specified browser name matched more than one running instance.
-    #[error("multiple browser instances match '{selector}'; use --instance <pid> to disambiguate")]
-    AmbiguousInstance {
-        /// The selector that matched multiple instances.
-        selector: String,
-    },
 
     /// The browser command returned an error.
     #[error("command failed: {0}")]
@@ -90,64 +54,6 @@ pub enum Error {
     #[error("failed to generate shell completion: {0}")]
     GenerateShellCompletion(#[source] std::io::Error),
 
-    /// The user's home directory could not be determined.
-    #[error("could not determine home directory for manifest installation")]
-    NoBrowserHome,
-
-    /// No mediator binary path was given and none could be found automatically.
-    #[error(
-        "mediator binary not found next to this executable; use --mediator-path to specify its location"
-    )]
-    MediatorNotFound,
-
-    /// `--extension-id` is required for Chromium-family browsers but was not supplied.
-    #[error(
-        "Chromium-family browsers require --extension-id; \
-         find the ID on chrome://extensions after loading the unpacked extension \
-         (a 32-character lowercase letter string)"
-    )]
-    ChromiumExtensionIdRequired,
-
-    /// No window matched the given criteria.
-    #[error("no window matched the criteria: {criteria}")]
-    NoMatchingWindow {
-        /// Description of the criteria that were used.
-        criteria: String,
-    },
-
-    /// More than one window matched the criteria and `--if-matches-multiple abort` was set.
-    #[error(
-        "{count} windows matched the criteria: {criteria}; use --if-matches-multiple all to apply to all"
-    )]
-    AmbiguousWindow {
-        /// Number of windows that matched.
-        count: usize,
-        /// Description of the criteria that were used.
-        criteria: String,
-    },
-
-    /// No tab matched the given criteria.
-    #[error("no tab matched the criteria: {criteria}")]
-    NoMatchingTab {
-        /// Description of the criteria that were used.
-        criteria: String,
-    },
-
-    /// More than one tab matched the criteria and `--if-matches-multiple abort` was set.
-    #[error(
-        "{count} tabs matched the criteria: {criteria}; use --if-matches-multiple all to apply to all"
-    )]
-    AmbiguousTab {
-        /// Number of tabs that matched.
-        count: usize,
-        /// Description of the criteria that were used.
-        criteria: String,
-    },
-
-    /// A regular expression pattern supplied by the user could not be compiled.
-    #[error("invalid regex: {0}")]
-    InvalidRegex(#[from] regex::Error),
-
     /// A command timed out waiting for a response.
     #[error(
         "command timed out after {0}s (the extension may have been reloaded or the page may not finish loading)"
@@ -155,23 +61,12 @@ pub enum Error {
     CommandTimeout(u64),
 }
 
-/// The native messaging protocol family, which determines the JSON manifest format.
+/// Browser to install the native messaging host manifest for (CLI argument type).
 ///
-/// Each family uses a different field to restrict which browser extension may connect:
-/// Gecko uses `allowed_extensions` (extension IDs), Chromium uses `allowed_origins`
-/// (extension origin URLs). New browser families can be added here without changing
-/// [`BrowserTarget`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BrowserFamily {
-    /// Gecko-based browsers (Firefox and its forks); manifest uses `allowed_extensions`.
-    Gecko,
-    /// Chromium-based browsers (Chrome, Chromium, Brave, Edge, …); manifest uses `allowed_origins`.
-    Chromium,
-}
-
-/// Browser to install the native messaging host manifest for.
+/// Mirrors [`browser_controller_client::BrowserTarget`] but derives [`clap::ValueEnum`]
+/// to allow direct CLI parsing.
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BrowserTarget {
+pub enum CliBrowserTarget {
     /// Mozilla Firefox.
     Firefox,
     /// LibreWolf (privacy-focused Firefox fork).
@@ -188,117 +83,28 @@ pub enum BrowserTarget {
     Edge,
 }
 
-impl BrowserTarget {
-    /// Return the native messaging protocol family used by this browser.
-    ///
-    /// The family determines which JSON manifest format is written.
-    #[must_use]
-    const fn family(self) -> BrowserFamily {
-        match self {
-            Self::Firefox | Self::Librewolf | Self::Waterfox => BrowserFamily::Gecko,
-            Self::Chrome | Self::Chromium | Self::Brave | Self::Edge => BrowserFamily::Chromium,
-        }
-    }
-
-    /// Return the directory where this browser looks for native messaging host manifests.
-    #[must_use]
-    fn manifest_dir(self, base: &directories::BaseDirs) -> std::path::PathBuf {
-        #[cfg(target_os = "linux")]
-        {
-            let home = base.home_dir();
-            match self {
-                Self::Firefox => home.join(".mozilla/native-messaging-hosts"),
-                Self::Librewolf => home.join(".librewolf/native-messaging-hosts"),
-                Self::Waterfox => home.join(".waterfox/native-messaging-hosts"),
-                Self::Chrome => home.join(".config/google-chrome/NativeMessagingHosts"),
-                Self::Chromium => home.join(".config/chromium/NativeMessagingHosts"),
-                Self::Brave => {
-                    home.join(".config/BraveSoftware/Brave-Browser/NativeMessagingHosts")
-                }
-                Self::Edge => home.join(".config/microsoft-edge/NativeMessagingHosts"),
-            }
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            let home = base.home_dir();
-            match self {
-                Self::Firefox => {
-                    home.join("Library/Application Support/Mozilla/NativeMessagingHosts")
-                }
-                Self::Librewolf => {
-                    home.join("Library/Application Support/librewolf/NativeMessagingHosts")
-                }
-                Self::Waterfox => {
-                    home.join("Library/Application Support/Waterfox/NativeMessagingHosts")
-                }
-                Self::Chrome => {
-                    home.join("Library/Application Support/Google/Chrome/NativeMessagingHosts")
-                }
-                Self::Chromium => {
-                    home.join("Library/Application Support/Chromium/NativeMessagingHosts")
-                }
-                Self::Brave => home.join(
-                    "Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts",
-                ),
-                Self::Edge => {
-                    home.join("Library/Application Support/Microsoft Edge/NativeMessagingHosts")
-                }
-            }
-        }
-
-        // Windows: JSON manifest file lives under APPDATA or LOCALAPPDATA.
-        // A registry key also points to it (written in install_manifest).
-        // `base` (home directory) is unused on Windows; bind it to suppress the warning.
-        #[cfg(target_os = "windows")]
-        {
-            let _base = base;
-            let appdata = std::env::var("APPDATA").unwrap_or_default();
-            let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
-            match self {
-                Self::Firefox | Self::Librewolf | Self::Waterfox => {
-                    std::path::Path::new(&appdata).join("Mozilla/NativeMessagingHosts")
-                }
-                Self::Chrome => {
-                    std::path::Path::new(&localappdata).join("Google/Chrome/NativeMessagingHosts")
-                }
-                Self::Chromium => {
-                    std::path::Path::new(&localappdata).join("Chromium/NativeMessagingHosts")
-                }
-                Self::Brave => std::path::Path::new(&localappdata)
-                    .join("BraveSoftware/Brave-Browser/NativeMessagingHosts"),
-                Self::Edge => {
-                    std::path::Path::new(&localappdata).join("Microsoft/Edge/NativeMessagingHosts")
-                }
-            }
-        }
-    }
-
-    /// Return the Windows registry subkey path for this browser's native messaging host.
-    ///
-    /// The key is written under `HKEY_CURRENT_USER` during `install-manifest`.
-    #[cfg(target_os = "windows")]
-    #[must_use]
-    const fn windows_registry_key(self) -> &'static str {
-        match self {
-            Self::Firefox | Self::Librewolf | Self::Waterfox => {
-                r"Software\Mozilla\NativeMessagingHosts\browser_controller"
-            }
-            Self::Chrome => r"Software\Google\Chrome\NativeMessagingHosts\browser_controller",
-            Self::Chromium => r"Software\Chromium\NativeMessagingHosts\browser_controller",
-            Self::Brave => {
-                r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\browser_controller"
-            }
-            Self::Edge => r"Software\Microsoft\Edge\NativeMessagingHosts\browser_controller",
+impl From<CliBrowserTarget> for browser_controller_client::BrowserTarget {
+    /// Convert a [`CliBrowserTarget`] CLI value into the client library's
+    /// [`BrowserTarget`](browser_controller_client::BrowserTarget) type.
+    fn from(value: CliBrowserTarget) -> Self {
+        match value {
+            CliBrowserTarget::Firefox => Self::Firefox,
+            CliBrowserTarget::Librewolf => Self::Librewolf,
+            CliBrowserTarget::Waterfox => Self::Waterfox,
+            CliBrowserTarget::Chrome => Self::Chrome,
+            CliBrowserTarget::Chromium => Self::Chromium,
+            CliBrowserTarget::Brave => Self::Brave,
+            CliBrowserTarget::Edge => Self::Edge,
         }
     }
 }
 
-/// Controls behavior when a matcher criterion matches more than one window or tab.
+/// Controls behavior when a matcher criterion matches more than one window or tab (CLI argument type).
 ///
-/// Used with `--if-matches-multiple` on window and tab commands.
+/// Mirrors [`browser_controller_client::MultipleMatchBehavior`] but derives [`clap::ValueEnum`]
+/// to allow direct CLI parsing.
 #[derive(clap::ValueEnum, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum MultipleMatchBehavior {
+pub enum CliMultipleMatchBehavior {
     /// Abort with an error if more than one match is found.
     ///
     /// Zero matches always produce an error regardless of this setting.
@@ -310,11 +116,22 @@ pub enum MultipleMatchBehavior {
     All,
 }
 
+impl From<CliMultipleMatchBehavior> for browser_controller_client::MultipleMatchBehavior {
+    /// Convert a [`CliMultipleMatchBehavior`] CLI value into the client library's
+    /// [`MultipleMatchBehavior`](browser_controller_client::MultipleMatchBehavior) type.
+    fn from(value: CliMultipleMatchBehavior) -> Self {
+        match value {
+            CliMultipleMatchBehavior::Abort => Self::Abort,
+            CliMultipleMatchBehavior::All => Self::All,
+        }
+    }
+}
+
 /// CLI representation of a window's visual state, for use with `--window-state`.
 ///
 /// Mirrors [`WindowState`] but derives [`clap::ValueEnum`] to allow direct CLI parsing.
 ///
-/// [`WindowState`]: browser_controller_types::WindowState
+/// [`WindowState`]: browser_controller_client::WindowState
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowStateArg {
     /// Window is in its normal state.
@@ -343,7 +160,7 @@ impl From<WindowStateArg> for WindowState {
 ///
 /// Mirrors [`TabStatus`] but derives [`clap::ValueEnum`] to allow direct CLI parsing.
 ///
-/// [`TabStatus`]: browser_controller_types::TabStatus
+/// [`TabStatus`]: browser_controller_client::TabStatus
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabStatusArg {
     /// The tab is currently loading.
@@ -362,7 +179,7 @@ impl From<TabStatusArg> for TabStatus {
     }
 }
 
-/// Criteria for selecting one or more browser windows.
+/// Criteria for selecting one or more browser windows (CLI argument type).
 ///
 /// All provided criteria are combined with AND logic. If no criteria are specified,
 /// every window will match, which will produce an error unless
@@ -372,7 +189,7 @@ impl From<TabStatusArg> for TabStatus {
     reason = "Each bool is an independent opt-in filter flag; there is no simpler representation"
 )]
 #[derive(clap::Args, Debug, Default)]
-pub struct WindowMatcher {
+pub struct CliWindowMatcher {
     /// Match a window by its exact browser-assigned numeric ID.
     #[clap(long)]
     pub window_id: Option<u32>,
@@ -405,49 +222,46 @@ pub struct WindowMatcher {
     /// `abort` (the default) treats more than one match as an error.
     /// `all` applies the command to every matched window.
     #[clap(long, default_value = "abort")]
-    pub if_matches_multiple: MultipleMatchBehavior,
+    pub if_matches_multiple: CliMultipleMatchBehavior,
 }
 
-impl std::fmt::Display for WindowMatcher {
-    /// Format the active window criteria as a human-readable string for error messages.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut parts: Vec<String> = Vec::new();
-        if let Some(id) = self.window_id {
-            parts.push(format!("window-id={id}"));
-        }
-        if let Some(ref title) = self.window_title {
-            parts.push(format!("window-title={title:?}"));
-        }
-        if let Some(ref prefix) = self.window_title_prefix {
-            parts.push(format!("window-title-prefix={prefix:?}"));
-        }
-        if let Some(ref regex) = self.window_title_regex {
-            parts.push(format!("window-title-regex={regex:?}"));
-        }
-        if self.window_focused {
-            parts.push("window-focused".to_owned());
-        }
-        if self.window_not_focused {
-            parts.push("window-not-focused".to_owned());
-        }
-        if self.window_last_focused {
-            parts.push("window-last-focused".to_owned());
-        }
-        if self.window_not_last_focused {
-            parts.push("window-not-last-focused".to_owned());
-        }
-        if let Some(state) = self.window_state {
-            parts.push(format!("window-state={state:?}"));
-        }
-        if parts.is_empty() {
-            write!(f, "(all windows)")
-        } else {
-            write!(f, "{}", parts.join(", "))
+impl From<CliWindowMatcher> for browser_controller_client::WindowMatcher {
+    /// Convert the CLI's clap-derived window matcher into the client library's matcher.
+    fn from(m: CliWindowMatcher) -> Self {
+        Self {
+            window_id: m.window_id,
+            window_title: m.window_title,
+            window_title_prefix: m.window_title_prefix,
+            window_title_regex: m.window_title_regex,
+            window_focused: m.window_focused,
+            window_not_focused: m.window_not_focused,
+            window_last_focused: m.window_last_focused,
+            window_not_last_focused: m.window_not_last_focused,
+            window_state: m.window_state.map(Into::into),
+            if_matches_multiple: m.if_matches_multiple.into(),
         }
     }
 }
 
-/// Criteria for selecting one or more browser tabs.
+impl From<&CliWindowMatcher> for browser_controller_client::WindowMatcher {
+    /// Convert a reference to the CLI's clap-derived window matcher into the client library's matcher.
+    fn from(m: &CliWindowMatcher) -> Self {
+        Self {
+            window_id: m.window_id,
+            window_title: m.window_title.clone(),
+            window_title_prefix: m.window_title_prefix.clone(),
+            window_title_regex: m.window_title_regex.clone(),
+            window_focused: m.window_focused,
+            window_not_focused: m.window_not_focused,
+            window_last_focused: m.window_last_focused,
+            window_not_last_focused: m.window_not_last_focused,
+            window_state: m.window_state.map(Into::into),
+            if_matches_multiple: m.if_matches_multiple.into(),
+        }
+    }
+}
+
+/// Criteria for selecting one or more browser tabs (CLI argument type).
 ///
 /// All provided criteria are combined with AND logic. If no criteria are specified,
 /// every tab in every searched window will match, which will produce an error unless
@@ -457,7 +271,7 @@ impl std::fmt::Display for WindowMatcher {
     reason = "Each bool is an independent opt-in filter flag mirroring the boolean fields of TabDetails; there is no simpler representation"
 )]
 #[derive(clap::Args, Debug, Default)]
-pub struct TabMatcher {
+pub struct CliTabMatcher {
     /// Match a tab by its exact browser-assigned numeric ID.
     #[clap(long)]
     pub tab_id: Option<u32>,
@@ -541,95 +355,75 @@ pub struct TabMatcher {
     /// `abort` (the default) treats more than one match as an error.
     /// `all` applies the command to every matched tab.
     #[clap(long, default_value = "abort")]
-    pub if_matches_multiple: MultipleMatchBehavior,
+    pub if_matches_multiple: CliMultipleMatchBehavior,
 }
 
-impl std::fmt::Display for TabMatcher {
-    /// Format the active tab criteria as a human-readable string for error messages.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut parts: Vec<String> = Vec::new();
-        if let Some(id) = self.tab_id {
-            parts.push(format!("tab-id={id}"));
+impl From<CliTabMatcher> for browser_controller_client::TabMatcher {
+    /// Convert the CLI's clap-derived tab matcher into the client library's matcher.
+    fn from(m: CliTabMatcher) -> Self {
+        Self {
+            tab_id: m.tab_id,
+            tab_title: m.tab_title,
+            tab_title_regex: m.tab_title_regex,
+            tab_url: m.tab_url,
+            tab_url_domain: m.tab_url_domain,
+            tab_url_regex: m.tab_url_regex,
+            tab_window_id: m.tab_window_id,
+            tab_active: m.tab_active,
+            tab_not_active: m.tab_not_active,
+            tab_pinned: m.tab_pinned,
+            tab_not_pinned: m.tab_not_pinned,
+            tab_discarded: m.tab_discarded,
+            tab_not_discarded: m.tab_not_discarded,
+            tab_audible: m.tab_audible,
+            tab_not_audible: m.tab_not_audible,
+            tab_muted: m.tab_muted,
+            tab_not_muted: m.tab_not_muted,
+            tab_incognito: m.tab_incognito,
+            tab_not_incognito: m.tab_not_incognito,
+            tab_awaiting_auth: m.tab_awaiting_auth,
+            tab_not_awaiting_auth: m.tab_not_awaiting_auth,
+            tab_in_reader_mode: m.tab_in_reader_mode,
+            tab_not_in_reader_mode: m.tab_not_in_reader_mode,
+            tab_status: m.tab_status.map(Into::into),
+            tab_cookie_store_id: m.tab_cookie_store_id,
+            tab_container_name: m.tab_container_name,
+            if_matches_multiple: m.if_matches_multiple.into(),
         }
-        if let Some(ref title) = self.tab_title {
-            parts.push(format!("tab-title={title:?}"));
-        }
-        if let Some(ref regex) = self.tab_title_regex {
-            parts.push(format!("tab-title-regex={regex:?}"));
-        }
-        if let Some(ref url) = self.tab_url {
-            parts.push(format!("tab-url={url:?}"));
-        }
-        if let Some(ref domain) = self.tab_url_domain {
-            parts.push(format!("tab-url-domain={domain:?}"));
-        }
-        if let Some(ref regex) = self.tab_url_regex {
-            parts.push(format!("tab-url-regex={regex:?}"));
-        }
-        if let Some(win_id) = self.tab_window_id {
-            parts.push(format!("tab-window-id={win_id}"));
-        }
-        if self.tab_active {
-            parts.push("tab-active".to_owned());
-        }
-        if self.tab_not_active {
-            parts.push("tab-not-active".to_owned());
-        }
-        if self.tab_pinned {
-            parts.push("tab-pinned".to_owned());
-        }
-        if self.tab_not_pinned {
-            parts.push("tab-not-pinned".to_owned());
-        }
-        if self.tab_discarded {
-            parts.push("tab-discarded".to_owned());
-        }
-        if self.tab_not_discarded {
-            parts.push("tab-not-discarded".to_owned());
-        }
-        if self.tab_audible {
-            parts.push("tab-audible".to_owned());
-        }
-        if self.tab_not_audible {
-            parts.push("tab-not-audible".to_owned());
-        }
-        if self.tab_muted {
-            parts.push("tab-muted".to_owned());
-        }
-        if self.tab_not_muted {
-            parts.push("tab-not-muted".to_owned());
-        }
-        if self.tab_incognito {
-            parts.push("tab-incognito".to_owned());
-        }
-        if self.tab_not_incognito {
-            parts.push("tab-not-incognito".to_owned());
-        }
-        if self.tab_awaiting_auth {
-            parts.push("tab-awaiting-auth".to_owned());
-        }
-        if self.tab_not_awaiting_auth {
-            parts.push("tab-not-awaiting-auth".to_owned());
-        }
-        if self.tab_in_reader_mode {
-            parts.push("tab-in-reader-mode".to_owned());
-        }
-        if self.tab_not_in_reader_mode {
-            parts.push("tab-not-in-reader-mode".to_owned());
-        }
-        if let Some(status) = self.tab_status {
-            parts.push(format!("tab-status={status:?}"));
-        }
-        if let Some(ref id) = self.tab_cookie_store_id {
-            parts.push(format!("tab-cookie-store-id={id:?}"));
-        }
-        if let Some(ref name) = self.tab_container_name {
-            parts.push(format!("tab-container-name={name:?}"));
-        }
-        if parts.is_empty() {
-            write!(f, "(all tabs)")
-        } else {
-            write!(f, "{}", parts.join(", "))
+    }
+}
+
+impl From<&CliTabMatcher> for browser_controller_client::TabMatcher {
+    /// Convert a reference to the CLI's clap-derived tab matcher into the client library's matcher.
+    fn from(m: &CliTabMatcher) -> Self {
+        Self {
+            tab_id: m.tab_id,
+            tab_title: m.tab_title.clone(),
+            tab_title_regex: m.tab_title_regex.clone(),
+            tab_url: m.tab_url.clone(),
+            tab_url_domain: m.tab_url_domain.clone(),
+            tab_url_regex: m.tab_url_regex.clone(),
+            tab_window_id: m.tab_window_id,
+            tab_active: m.tab_active,
+            tab_not_active: m.tab_not_active,
+            tab_pinned: m.tab_pinned,
+            tab_not_pinned: m.tab_not_pinned,
+            tab_discarded: m.tab_discarded,
+            tab_not_discarded: m.tab_not_discarded,
+            tab_audible: m.tab_audible,
+            tab_not_audible: m.tab_not_audible,
+            tab_muted: m.tab_muted,
+            tab_not_muted: m.tab_not_muted,
+            tab_incognito: m.tab_incognito,
+            tab_not_incognito: m.tab_not_incognito,
+            tab_awaiting_auth: m.tab_awaiting_auth,
+            tab_not_awaiting_auth: m.tab_not_awaiting_auth,
+            tab_in_reader_mode: m.tab_in_reader_mode,
+            tab_not_in_reader_mode: m.tab_not_in_reader_mode,
+            tab_status: m.tab_status.map(Into::into),
+            tab_cookie_store_id: m.tab_cookie_store_id.clone(),
+            tab_container_name: m.tab_container_name.clone(),
+            if_matches_multiple: m.if_matches_multiple.into(),
         }
     }
 }
@@ -725,7 +519,7 @@ pub enum Command {
     InstallManifest {
         /// Browser to install the manifest for.
         #[clap(long)]
-        browser: BrowserTarget,
+        browser: CliBrowserTarget,
         /// Path to the `browser-controller-mediator` binary.
         ///
         /// If omitted, the CLI looks for `browser-controller-mediator` next to its
@@ -803,13 +597,13 @@ pub enum WindowsCommand {
     Close {
         /// Criteria selecting the window(s) to close.
         #[clap(flatten)]
-        window: WindowMatcher,
+        window: CliWindowMatcher,
     },
     /// Set the title prefix (Firefox `titlePreface`) for one or more windows.
     SetTitlePrefix {
         /// Criteria selecting the window(s) to modify.
         #[clap(flatten)]
-        window: WindowMatcher,
+        window: CliWindowMatcher,
         /// Prefix to prepend to the window title.
         prefix: String,
     },
@@ -817,7 +611,7 @@ pub enum WindowsCommand {
     RemoveTitlePrefix {
         /// Criteria selecting the window(s) to modify.
         #[clap(flatten)]
-        window: WindowMatcher,
+        window: CliWindowMatcher,
     },
 }
 
@@ -836,13 +630,13 @@ pub enum TabsCommand {
     List {
         /// Criteria selecting the window(s) whose tabs to list.
         #[clap(flatten)]
-        window: WindowMatcher,
+        window: CliWindowMatcher,
     },
     /// Open a new tab in a window.
     Open {
         /// Criteria selecting the window in which to open the tab.
         #[clap(flatten)]
-        window: WindowMatcher,
+        window: CliWindowMatcher,
         /// Insert the new tab immediately before the tab with this ID.
         #[clap(long, conflicts_with = "after")]
         before: Option<u32>,
@@ -890,13 +684,13 @@ pub enum TabsCommand {
     Activate {
         /// Criteria selecting the tab(s) to activate.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
     },
     /// Navigate an existing tab to a new URL.
     Navigate {
         /// Criteria selecting the tab(s) to navigate.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
         /// URL to load in the tab.
         #[clap(long)]
         url: String,
@@ -908,7 +702,7 @@ pub enum TabsCommand {
     ReopenInContainer {
         /// Criteria selecting the tab(s) to reopen.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
         /// Target container's cookie store ID (e.g. `firefox-container-1`).
         #[clap(long)]
         container: String,
@@ -917,7 +711,7 @@ pub enum TabsCommand {
     Reload {
         /// Criteria selecting the tab(s) to reload.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
         /// Bypass the browser cache (hard refresh).
         #[clap(long)]
         bypass_cache: bool,
@@ -926,19 +720,19 @@ pub enum TabsCommand {
     Close {
         /// Criteria selecting the tab(s) to close.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
     },
     /// Pin one or more tabs.
     Pin {
         /// Criteria selecting the tab(s) to pin.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
     },
     /// Unpin one or more tabs.
     Unpin {
         /// Criteria selecting the tab(s) to unpin.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
     },
     /// Toggle Reader Mode for one or more tabs.
     ///
@@ -946,7 +740,7 @@ pub enum TabsCommand {
     ToggleReaderMode {
         /// Criteria selecting the tab(s) to toggle.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
     },
     /// Discard one or more tabs, unloading their content from memory without closing them.
     ///
@@ -955,31 +749,31 @@ pub enum TabsCommand {
     Discard {
         /// Criteria selecting the tab(s) to discard.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
     },
     /// Warm up one or more discarded tabs, loading their content into memory without activating.
     Warmup {
         /// Criteria selecting the tab(s) to warm up.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
     },
     /// Mute one or more tabs, suppressing any audio they produce.
     Mute {
         /// Criteria selecting the tab(s) to mute.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
     },
     /// Unmute one or more tabs, allowing them to produce audio again.
     Unmute {
         /// Criteria selecting the tab(s) to unmute.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
     },
     /// Move a tab to a new position within its window.
     Move {
         /// Criteria selecting the tab(s) to move.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
         /// New zero-based index for the tab within its window.
         #[clap(long)]
         new_index: u32,
@@ -988,7 +782,7 @@ pub enum TabsCommand {
     Back {
         /// Criteria selecting the tab(s) to navigate backward.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
         /// Number of steps to go back.
         ///
         /// Values greater than 1 skip intermediate pages atomically, which is useful
@@ -1000,7 +794,7 @@ pub enum TabsCommand {
     Forward {
         /// Criteria selecting the tab(s) to navigate forward.
         #[clap(flatten)]
-        tab: TabMatcher,
+        tab: CliTabMatcher,
         /// Number of steps to go forward.
         ///
         /// Values greater than 1 skip intermediate pages atomically, which is useful
@@ -1012,7 +806,7 @@ pub enum TabsCommand {
     Sort {
         /// Criteria selecting the window(s) whose tabs to sort.
         #[clap(flatten)]
-        window: WindowMatcher,
+        window: CliWindowMatcher,
         /// List of domains in the desired sort order. Tabs with domains not in this list
         /// will be placed after all listed domains, maintaining their original relative order.
         /// Tabs with the same domain will also maintain their original relative order (stable sort).
@@ -1036,7 +830,7 @@ pub enum DownloadStateArg {
     Interrupted,
 }
 
-impl From<DownloadStateArg> for browser_controller_types::DownloadState {
+impl From<DownloadStateArg> for browser_controller_client::DownloadState {
     fn from(arg: DownloadStateArg) -> Self {
         match arg {
             DownloadStateArg::InProgress => Self::InProgress,
@@ -1057,7 +851,7 @@ pub enum FilenameConflictActionArg {
     Prompt,
 }
 
-impl From<FilenameConflictActionArg> for browser_controller_types::FilenameConflictAction {
+impl From<FilenameConflictActionArg> for browser_controller_client::FilenameConflictAction {
     fn from(arg: FilenameConflictActionArg) -> Self {
         match arg {
             FilenameConflictActionArg::Uniquify => Self::Uniquify,
@@ -1158,14 +952,6 @@ pub enum ContainersCommand {
     List,
 }
 
-/// A discovered mediator instance.
-struct DiscoveredInstance {
-    /// Path to the mediator's UDS socket.
-    socket_path: std::path::PathBuf,
-    /// Browser information returned by the mediator.
-    info: BrowserInfo,
-}
-
 /// Serializable view of a discovered instance for JSON output.
 #[derive(Debug, serde::Serialize)]
 struct DiscoveredInstanceJson<'a> {
@@ -1181,267 +967,6 @@ struct DiscoveredInstanceJson<'a> {
     pid: u32,
     /// Firefox profile ID (directory basename), if available.
     profile_id: Option<&'a str>,
-}
-
-/// Return the directory where mediator IPC socket/marker files are stored.
-///
-/// - Linux: `$XDG_RUNTIME_DIR/browser-controller/`
-/// - macOS: `$TMPDIR/browser-controller/` (user-private; falls back to `~/Library/Caches`)
-/// - Windows: `%LOCALAPPDATA%\Temp\browser-controller\`
-///
-/// # Errors
-///
-/// Returns [`Error::NoRuntimeDir`] when the platform base directory cannot be determined.
-fn socket_dir() -> Result<std::path::PathBuf, Error> {
-    #[cfg(target_os = "linux")]
-    {
-        let runtime_dir =
-            std::env::var("XDG_RUNTIME_DIR").map_err(|_not_set| Error::NoRuntimeDir)?;
-        Ok(std::path::Path::new(&runtime_dir).join("browser-controller"))
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let dir = std::env::var("TMPDIR")
-            .map(|t| std::path::Path::new(&t).join("browser-controller"))
-            .or_else(|_| {
-                directories::BaseDirs::new()
-                    .map(|b| b.cache_dir().join("browser-controller"))
-                    .ok_or(Error::NoRuntimeDir)
-            })?;
-        Ok(dir)
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let local = std::env::var("LOCALAPPDATA").map_err(|_| Error::NoRuntimeDir)?;
-        Ok(std::path::Path::new(&local)
-            .join("Temp")
-            .join("browser-controller"))
-    }
-}
-
-/// File extension used for mediator IPC discovery files.
-///
-/// On Unix: `.sock` (the actual socket file).
-/// On Windows: `.pipe` (empty marker file; named pipe is discovered from the stem).
-#[cfg(unix)]
-const SOCKET_EXT: &str = "sock";
-#[cfg(windows)]
-const SOCKET_EXT: &str = "pipe";
-
-/// List all mediator IPC discovery files in `dir`.
-///
-/// # Errors
-///
-/// Returns an error if the directory cannot be read.
-fn list_socket_files(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>, Error> {
-    tracing::debug!(dir = %dir.display(), "Scanning socket directory");
-    let rd = match fs_err::read_dir(dir) {
-        Ok(rd) => rd,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            tracing::debug!(dir = %dir.display(), "Socket directory does not exist");
-            return Ok(Vec::new());
-        }
-        Err(e) => return Err(Error::Io(e)),
-    };
-    let mut paths = Vec::new();
-    for entry in rd {
-        let path = entry.map_err(Error::Io)?.path();
-        if path.extension() == Some(std::ffi::OsStr::new(SOCKET_EXT)) {
-            tracing::debug!(socket = %path.display(), "Found socket file");
-            paths.push(path);
-        } else {
-            tracing::debug!(path = %path.display(), "Ignoring non-socket file");
-        }
-    }
-    if paths.is_empty() {
-        tracing::debug!(dir = %dir.display(), "No socket files found in directory");
-    }
-    Ok(paths)
-}
-
-/// Connect to a mediator socket, send `GetBrowserInfo`, and return the result.
-///
-/// Times out after [`INSTANCE_QUERY_TIMEOUT`].
-///
-/// # Errors
-///
-/// Returns an error if the connection or query fails or times out.
-async fn query_instance(socket_path: &std::path::Path) -> Result<BrowserInfo, Error> {
-    let result = tokio::time::timeout(
-        INSTANCE_QUERY_TIMEOUT,
-        send_command(socket_path, CliCommand::GetBrowserInfo),
-    )
-    .await
-    .map_err(|_elapsed| {
-        Error::Io(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "instance query timed out",
-        ))
-    })?;
-
-    match result? {
-        CliResult::BrowserInfo(info) => Ok(info),
-        other => Err(Error::CommandFailed(format!(
-            "unexpected response to GetBrowserInfo: {other:?}"
-        ))),
-    }
-}
-
-/// Discover all running mediator instances by scanning the socket directory.
-///
-/// Sockets that cannot be connected to (e.g. stale) are silently skipped.
-///
-/// # Errors
-///
-/// Returns an error if `XDG_RUNTIME_DIR` is not set or the directory cannot be read.
-async fn discover_instances() -> Result<Vec<DiscoveredInstance>, Error> {
-    let dir = socket_dir()?;
-    tracing::debug!(dir = %dir.display(), "Discovering mediator instances");
-    let sock_paths = tokio::task::spawn_blocking({
-        let dir = dir.clone();
-        move || list_socket_files(&dir)
-    })
-    .await??;
-    tracing::debug!(count = sock_paths.len(), "Socket files found");
-
-    let mut instances = Vec::new();
-    for socket_path in sock_paths {
-        match query_instance(&socket_path).await {
-            Ok(info) => {
-                tracing::debug!(
-                    socket = %socket_path.display(),
-                    browser = %info.browser_name,
-                    pid = info.pid,
-                    "Discovered instance",
-                );
-                instances.push(DiscoveredInstance { socket_path, info });
-            }
-            Err(e) => {
-                tracing::debug!(
-                    socket = %socket_path.display(),
-                    error = %e,
-                    "Skipping unreachable socket",
-                );
-            }
-        }
-    }
-    Ok(instances)
-}
-
-/// Select an instance from the discovered list based on the `--instance` flag value.
-///
-/// # Errors
-///
-/// Returns an error if no instances are running, the selector is ambiguous, or no match is found.
-fn select_instance<'a>(
-    instances: &'a [DiscoveredInstance],
-    selector: Option<&str>,
-    socket_dir: &std::path::Path,
-) -> Result<&'a DiscoveredInstance, Error> {
-    if instances.is_empty() {
-        return Err(Error::NoInstances {
-            dir: socket_dir.to_owned(),
-        });
-    }
-
-    match selector {
-        None => match instances {
-            [only] => Ok(only),
-            _ => Err(Error::MultipleInstances),
-        },
-        Some(sel) => {
-            // Try numeric PID match first.
-            if let Ok(pid) = sel.parse::<u32>() {
-                return instances.iter().find(|i| i.info.pid == pid).ok_or_else(|| {
-                    Error::NoMatchingInstance {
-                        selector: sel.to_owned(),
-                    }
-                });
-            }
-            // Browser name substring match (case-insensitive).
-            let sel_lower = sel.to_ascii_lowercase();
-            let matches: Vec<&DiscoveredInstance> = instances
-                .iter()
-                .filter(|i| {
-                    i.info
-                        .browser_name
-                        .to_ascii_lowercase()
-                        .contains(&sel_lower)
-                })
-                .collect();
-            match matches.as_slice() {
-                [] => Err(Error::NoMatchingInstance {
-                    selector: sel.to_owned(),
-                }),
-                [only] => Ok(*only),
-                _ => Err(Error::AmbiguousInstance {
-                    selector: sel.to_owned(),
-                }),
-            }
-        }
-    }
-}
-
-/// Derive the Windows named pipe name from a `.pipe` marker file path.
-///
-/// The stem of the file (the PID) is used to construct `\\.\pipe\browser-controller-<pid>`.
-#[cfg(windows)]
-fn pipe_name_from_marker(path: &std::path::Path) -> Result<String, Error> {
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| Error::Io(std::io::Error::other("invalid pipe marker path")))?;
-    Ok(format!(r"\\.\pipe\browser-controller-{stem}"))
-}
-
-/// Send a command to a mediator and return the result.
-///
-/// # Errors
-///
-/// Returns an error if the connection, serialization, or communication fails, or if the
-/// command itself fails.
-async fn send_command(
-    socket_path: &std::path::Path,
-    command: CliCommand,
-) -> Result<CliResult, Error> {
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let request = CliRequest {
-        request_id: request_id.clone(),
-        command,
-    };
-
-    #[cfg(unix)]
-    let stream = tokio::net::UnixStream::connect(socket_path).await?;
-    #[cfg(windows)]
-    let stream = {
-        let pipe_name = pipe_name_from_marker(socket_path)?;
-        tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name)?
-    };
-
-    let (read_half, mut write_half) = tokio::io::split(stream);
-
-    let mut json = serde_json::to_vec(&request)?;
-    json.push(b'\n');
-    write_half.write_all(&json).await?;
-
-    let mut reader = tokio::io::BufReader::new(read_half);
-    let mut line = String::new();
-    reader.read_line(&mut line).await?;
-
-    let response: CliResponse = serde_json::from_str(line.trim_end())?;
-
-    if response.request_id != request_id {
-        tracing::warn!(
-            expected = %request_id,
-            received = %response.request_id,
-            "Response request_id mismatch",
-        );
-    }
-
-    match response.outcome {
-        CliOutcome::Ok(result) => Ok(result),
-        CliOutcome::Err(msg) => Err(Error::CommandFailed(msg)),
-    }
 }
 
 /// Print the `instances` list in human-readable format.
@@ -1663,6 +1188,10 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
             println!("Download {download_id}");
         }
         CliResult::Unit => {}
+        _ => {
+            // Unknown result variant — print as JSON fallback.
+            println!("{}", serde_json::to_string_pretty(result)?);
+        }
     }
     Ok(())
 }
@@ -1712,150 +1241,6 @@ fn print_result_json(result: &CliResult) -> Result<(), Error> {
     Ok(())
 }
 
-/// JSON structure of a Gecko-family native messaging host manifest.
-///
-/// Written to the browser's native-messaging-hosts directory as `browser_controller.json`.
-#[derive(Debug, serde::Serialize)]
-struct GeckoManifest<'a> {
-    /// The registered name of the native messaging host.
-    name: &'a str,
-    /// Human-readable description of the host.
-    description: &'a str,
-    /// Absolute path to the native messaging host binary.
-    path: &'a std::path::Path,
-    /// Transport type; always `"stdio"` for native messaging hosts.
-    #[serde(rename = "type")]
-    kind: &'a str,
-    /// Extension IDs allowed to connect to this host.
-    allowed_extensions: &'a [&'a str],
-}
-
-/// JSON structure of a Chromium-family native messaging host manifest.
-///
-/// Written to the browser's NativeMessagingHosts directory as `browser_controller.json`.
-/// Unlike the Gecko format, Chromium identifies allowed extensions by origin URL rather
-/// than extension ID string.
-#[derive(Debug, serde::Serialize)]
-struct ChromiumManifest<'a> {
-    /// The registered name of the native messaging host.
-    name: &'a str,
-    /// Human-readable description of the host.
-    description: &'a str,
-    /// Absolute path to the native messaging host binary.
-    path: &'a std::path::Path,
-    /// Transport type; always `"stdio"` for native messaging hosts.
-    #[serde(rename = "type")]
-    kind: &'a str,
-    /// Extension origin URLs allowed to connect to this host.
-    ///
-    /// Each entry has the form `"chrome-extension://<extension-id>/"`.
-    allowed_origins: &'a [String],
-}
-
-/// Result of a successful manifest installation, used for JSON output.
-#[derive(Debug, serde::Serialize)]
-struct InstallManifestResult<'a> {
-    /// Absolute path where the manifest was written.
-    manifest_path: &'a std::path::Path,
-    /// Absolute path to the mediator binary recorded in the manifest.
-    mediator_path: &'a std::path::Path,
-}
-
-/// Install the native messaging host manifest for the given browser.
-///
-/// # Errors
-///
-/// Returns an error if the home directory cannot be determined, the mediator binary cannot
-/// be found automatically, the manifest directory cannot be created, the manifest file
-/// cannot be written, or a Chromium-family browser is selected without `--extension-id`.
-#[expect(
-    clippy::print_stdout,
-    reason = "manifest installation result goes to stdout by design"
-)]
-fn install_manifest(
-    browser: BrowserTarget,
-    mediator_path: Option<std::path::PathBuf>,
-    extension_id: Option<String>,
-    format: OutputFormat,
-) -> Result<(), Error> {
-    let base = directories::BaseDirs::new().ok_or(Error::NoBrowserHome)?;
-
-    let mediator_path = match mediator_path {
-        Some(p) => p,
-        None => {
-            let exe = std::env::current_exe()?;
-            let candidate = exe
-                .parent()
-                .map(|dir| dir.join("browser-controller-mediator"));
-            match candidate {
-                Some(p) if p.exists() => p,
-                _ => return Err(Error::MediatorNotFound),
-            }
-        }
-    };
-
-    let manifest_dir = browser.manifest_dir(&base);
-    fs_err::create_dir_all(&manifest_dir).map_err(Error::Io)?;
-    let manifest_path = manifest_dir.join("browser_controller.json");
-
-    let json = match browser.family() {
-        BrowserFamily::Gecko => {
-            let manifest = GeckoManifest {
-                name: "browser_controller",
-                description: "Browser Controller Mediator",
-                path: &mediator_path,
-                kind: "stdio",
-                allowed_extensions: &["browser-controller@taladar.net"],
-            };
-            serde_json::to_string_pretty(&manifest)?
-        }
-        BrowserFamily::Chromium => {
-            let id = extension_id.ok_or(Error::ChromiumExtensionIdRequired)?;
-            let origin = format!("chrome-extension://{id}/");
-            let manifest = ChromiumManifest {
-                name: "browser_controller",
-                description: "Browser Controller Mediator",
-                path: &mediator_path,
-                kind: "stdio",
-                allowed_origins: &[origin],
-            };
-            serde_json::to_string_pretty(&manifest)?
-        }
-    };
-
-    fs_err::write(&manifest_path, json.as_bytes()).map_err(Error::Io)?;
-
-    // On Windows, browsers find native messaging hosts exclusively via the registry.
-    // Write the registry key pointing to the manifest file.
-    #[cfg(target_os = "windows")]
-    {
-        use winreg::RegKey;
-        use winreg::enums::HKEY_CURRENT_USER;
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let (key, _) = hkcu
-            .create_subkey(browser.windows_registry_key())
-            .map_err(Error::RegistryWriteFailed)?;
-        key.set_value("", &manifest_path.to_string_lossy().as_ref())
-            .map_err(Error::RegistryWriteFailed)?;
-    }
-
-    match format {
-        OutputFormat::Human => {
-            println!("Installed manifest to {}", manifest_path.display());
-            #[cfg(target_os = "windows")]
-            println!("Registered in HKCU\\{}", browser.windows_registry_key());
-        }
-        OutputFormat::Json => {
-            let result = InstallManifestResult {
-                manifest_path: &manifest_path,
-                mediator_path: &mediator_path,
-            };
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-    }
-    Ok(())
-}
-
 /// Print a [`CliResult`] using the requested output format.
 ///
 /// # Errors
@@ -1865,271 +1250,6 @@ fn print_result(result: &CliResult, format: OutputFormat) -> Result<(), Error> {
     match format {
         OutputFormat::Human => print_result_human(result),
         OutputFormat::Json => print_result_json(result),
-    }
-}
-
-/// Apply [`WindowMatcher`] criteria to a list of windows and return the matching IDs.
-///
-/// All criteria are combined with AND logic. An empty matcher matches every window.
-///
-/// # Errors
-///
-/// Returns [`Error::InvalidRegex`] if `--window-title-regex` cannot be compiled.
-fn match_windows(windows: &[WindowSummary], m: &WindowMatcher) -> Result<Vec<u32>, Error> {
-    let title_regex = m
-        .window_title_regex
-        .as_deref()
-        .map(Regex::new)
-        .transpose()?;
-
-    let matched = windows
-        .iter()
-        .filter(|win| {
-            if let Some(id) = m.window_id
-                && win.id != id
-            {
-                return false;
-            }
-            if let Some(ref title) = m.window_title
-                && win.title != *title
-            {
-                return false;
-            }
-            if let Some(ref prefix) = m.window_title_prefix
-                && win.title_prefix.as_deref() != Some(prefix.as_str())
-            {
-                return false;
-            }
-            if let Some(ref re) = title_regex
-                && !re.is_match(&win.title)
-            {
-                return false;
-            }
-            if m.window_focused && !win.is_focused {
-                return false;
-            }
-            if m.window_not_focused && win.is_focused {
-                return false;
-            }
-            if m.window_last_focused && !win.is_last_focused {
-                return false;
-            }
-            if m.window_not_last_focused && win.is_last_focused {
-                return false;
-            }
-            if let Some(state) = m.window_state
-                && win.state != state.into()
-            {
-                return false;
-            }
-            true
-        })
-        .map(|win| win.id)
-        .collect();
-    Ok(matched)
-}
-
-/// Apply [`TabMatcher`] criteria to a list of tabs and return the matching IDs.
-///
-/// All criteria are combined with AND logic. An empty matcher matches every tab.
-///
-/// # Errors
-///
-/// Returns [`Error::InvalidRegex`] if a regex pattern cannot be compiled.
-fn match_tabs(tabs: &[TabDetails], m: &TabMatcher) -> Result<Vec<u32>, Error> {
-    let title_regex = m.tab_title_regex.as_deref().map(Regex::new).transpose()?;
-    let url_regex = m.tab_url_regex.as_deref().map(Regex::new).transpose()?;
-
-    let matched = tabs
-        .iter()
-        .filter(|tab| {
-            if let Some(id) = m.tab_id
-                && tab.id != id
-            {
-                return false;
-            }
-            if let Some(ref title) = m.tab_title
-                && tab.title != *title
-            {
-                return false;
-            }
-            if let Some(ref re) = title_regex
-                && !re.is_match(&tab.title)
-            {
-                return false;
-            }
-            if let Some(ref url) = m.tab_url
-                && tab.url != *url
-            {
-                return false;
-            }
-            if let Some(ref domain) = m.tab_url_domain {
-                let tab_domain = url::Url::parse(&tab.url)
-                    .ok()
-                    .and_then(|u| u.domain().map(|s| s.to_owned()))
-                    .unwrap_or_default();
-                if tab_domain != *domain {
-                    return false;
-                }
-            }
-            if let Some(ref re) = url_regex
-                && !re.is_match(&tab.url)
-            {
-                return false;
-            }
-            if let Some(win_id) = m.tab_window_id
-                && tab.window_id != win_id
-            {
-                return false;
-            }
-            if m.tab_active && !tab.is_active {
-                return false;
-            }
-            if m.tab_not_active && tab.is_active {
-                return false;
-            }
-            if m.tab_pinned && !tab.is_pinned {
-                return false;
-            }
-            if m.tab_not_pinned && tab.is_pinned {
-                return false;
-            }
-            if m.tab_discarded && !tab.is_discarded {
-                return false;
-            }
-            if m.tab_not_discarded && tab.is_discarded {
-                return false;
-            }
-            if m.tab_audible && !tab.is_audible {
-                return false;
-            }
-            if m.tab_not_audible && tab.is_audible {
-                return false;
-            }
-            if m.tab_muted && !tab.is_muted {
-                return false;
-            }
-            if m.tab_not_muted && tab.is_muted {
-                return false;
-            }
-            if m.tab_incognito && !tab.incognito {
-                return false;
-            }
-            if m.tab_not_incognito && tab.incognito {
-                return false;
-            }
-            if m.tab_awaiting_auth && !tab.is_awaiting_auth {
-                return false;
-            }
-            if m.tab_not_awaiting_auth && tab.is_awaiting_auth {
-                return false;
-            }
-            if m.tab_in_reader_mode && !tab.is_in_reader_mode {
-                return false;
-            }
-            if m.tab_not_in_reader_mode && tab.is_in_reader_mode {
-                return false;
-            }
-            if let Some(status) = m.tab_status
-                && tab.status != status.into()
-            {
-                return false;
-            }
-            if let Some(ref id) = m.tab_cookie_store_id
-                && tab.cookie_store_id.as_deref() != Some(id.as_str())
-            {
-                return false;
-            }
-            if let Some(ref name) = m.tab_container_name
-                && tab.container_name.as_deref() != Some(name.as_str())
-            {
-                return false;
-            }
-            true
-        })
-        .map(|tab| tab.id)
-        .collect();
-    Ok(matched)
-}
-
-/// Resolve a [`WindowMatcher`] to a list of matching window IDs.
-///
-/// Sends `ListWindows` to the mediator, applies the matcher, and enforces
-/// [`MultipleMatchBehavior`].
-///
-/// # Errors
-///
-/// Returns an error if the command fails, the regex is invalid, no window matches, or
-/// multiple windows match and `--if-matches-multiple abort` is set.
-async fn resolve_windows(
-    socket_path: &std::path::Path,
-    matcher: &WindowMatcher,
-) -> Result<Vec<u32>, Error> {
-    let result = send_command(socket_path, CliCommand::ListWindows).await?;
-    let CliResult::Windows { windows } = result else {
-        return Err(Error::CommandFailed(format!(
-            "unexpected response to ListWindows: {result:?}"
-        )));
-    };
-    let matched = match_windows(&windows, matcher)?;
-    let criteria = matcher.to_string();
-    match matched.len() {
-        0 => Err(Error::NoMatchingWindow { criteria }),
-        1 => Ok(matched),
-        count => match matcher.if_matches_multiple {
-            MultipleMatchBehavior::Abort => Err(Error::AmbiguousWindow { count, criteria }),
-            MultipleMatchBehavior::All => Ok(matched),
-        },
-    }
-}
-
-/// Resolve a [`TabMatcher`] to a list of matching tab IDs.
-///
-/// If `--tab-window-id` is set, only that window is searched; otherwise `ListWindows`
-/// is called first to enumerate all windows, then `ListTabs` is called for each.
-/// Enforces [`MultipleMatchBehavior`].
-///
-/// # Errors
-///
-/// Returns an error if any command fails, a regex is invalid, no tab matches, or
-/// multiple tabs match and `--if-matches-multiple abort` is set.
-async fn resolve_tabs(
-    socket_path: &std::path::Path,
-    matcher: &TabMatcher,
-) -> Result<Vec<u32>, Error> {
-    let window_ids_to_search: Vec<u32> = if let Some(win_id) = matcher.tab_window_id {
-        vec![win_id]
-    } else {
-        let list_result = send_command(socket_path, CliCommand::ListWindows).await?;
-        let CliResult::Windows { windows } = list_result else {
-            return Err(Error::CommandFailed(format!(
-                "unexpected response to ListWindows: {list_result:?}"
-            )));
-        };
-        windows.iter().map(|w| w.id).collect()
-    };
-
-    let mut all_tabs: Vec<TabDetails> = Vec::new();
-    for win_id in window_ids_to_search {
-        let tabs_result =
-            send_command(socket_path, CliCommand::ListTabs { window_id: win_id }).await?;
-        let CliResult::Tabs { tabs } = tabs_result else {
-            return Err(Error::CommandFailed(format!(
-                "unexpected response to ListTabs: {tabs_result:?}"
-            )));
-        };
-        all_tabs.extend(tabs);
-    }
-
-    let matched = match_tabs(&all_tabs, matcher)?;
-    let criteria = matcher.to_string();
-    match matched.len() {
-        0 => Err(Error::NoMatchingTab { criteria }),
-        1 => Ok(matched),
-        count => match matcher.if_matches_multiple {
-            MultipleMatchBehavior::Abort => Err(Error::AmbiguousTab { count, criteria }),
-            MultipleMatchBehavior::All => Ok(matched),
-        },
     }
 }
 
@@ -2153,16 +1273,16 @@ async fn stream_events(
     // When neither filter is set, show all events (backward compatible).
     let show_all = !filter_downloads && !filter_windows_tabs;
 
-    let request = CliRequest {
-        request_id: uuid::Uuid::new_v4().to_string(),
-        command: CliCommand::SubscribeEvents,
-    };
+    let request = CliRequest::new(
+        uuid::Uuid::new_v4().to_string(),
+        CliCommand::SubscribeEvents,
+    );
 
     #[cfg(unix)]
     let stream = tokio::net::UnixStream::connect(socket_path).await?;
     #[cfg(windows)]
     let stream = {
-        let pipe_name = pipe_name_from_marker(socket_path)?;
+        let pipe_name = browser_controller_client::discovery::pipe_name_from_marker(socket_path)?;
         tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name)?
     };
 
@@ -2204,177 +1324,6 @@ async fn stream_events(
     Ok(())
 }
 
-/// Return `url_str` with any embedded `user:password@` credentials removed.
-///
-/// Used to normalize URLs before comparing them, so that a tab opened with
-/// `--strip-credentials` still matches a check against the credential-free URL.
-/// Falls back to the original string unchanged if parsing fails (e.g. non-HTTP URLs).
-#[must_use]
-fn strip_url_credentials(url_str: &str) -> String {
-    if let Ok(mut u) = url::Url::parse(url_str) {
-        // set_username/set_password only fail on cannot-be-a-base URLs (e.g. data:),
-        // which cannot carry credentials; the Err(()) is safe to ignore.
-        match u.set_username("") {
-            Ok(()) | Err(()) => {}
-        }
-        match u.set_password(None) {
-            Ok(()) | Err(()) => {}
-        }
-        u.to_string()
-    } else {
-        url_str.to_owned()
-    }
-}
-
-/// Load (or reload) a temporary extension via Firefox's Remote Debugging Protocol.
-///
-/// Connects to Firefox's debugger server, gets the root actor, finds the
-/// addons actor, and calls `installTemporaryAddon` with the given path.
-///
-/// # Errors
-///
-/// Returns an error if the connection fails, the protocol exchange fails,
-/// or the addon installation is rejected.
-async fn load_temporary_extension(path: &std::path::Path, port: u16) -> Result<(), Error> {
-    use tokio::net::TcpStream;
-
-    let canonical = fs_err::canonicalize(path)?;
-
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.map_err(|e| {
-        Error::CommandFailed(format!(
-            "cannot connect to Firefox debugger on port {port}: {e}. \
-                 Start Firefox with --start-debugger-server {port} or enable \
-                 devtools.debugger.remote-enabled in about:config"
-        ))
-    })?;
-
-    // Read the initial server hello
-    let hello = rdp_read(&mut stream).await.map_err(|e| {
-        Error::CommandFailed(format!(
-            "failed to read RDP hello from Firefox on port {port}: {e}"
-        ))
-    })?;
-    tracing::debug!(hello = %hello, "RDP hello");
-
-    // Get the root actor to find the addons actor
-    let root_response = rdp_call(&mut stream, r#"{"type":"getRoot","to":"root"}"#)
-        .await
-        .map_err(|e| Error::CommandFailed(format!("RDP getRoot failed: {e}")))?;
-    tracing::debug!(root = %root_response, "RDP getRoot");
-
-    // Parse the addonsActor name from the root response
-    let root: serde_json::Value = serde_json::from_str(&root_response).map_err(|e| {
-        Error::CommandFailed(format!(
-            "failed to parse RDP getRoot response as JSON: {e}; response was: {root_response}"
-        ))
-    })?;
-
-    // Check for error in root response
-    if let Some(err) = root.get("error") {
-        let message = root
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown error");
-        return Err(Error::CommandFailed(format!(
-            "RDP getRoot failed: {err}: {message}"
-        )));
-    }
-
-    let addons_actor = root
-        .get("addonsActor")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            Error::CommandFailed(format!(
-                "Firefox RDP response does not contain addonsActor \
-                 (ensure devtools.debugger.remote-enabled and devtools.chrome.enabled \
-                 are set to true in about:config); response was: {root_response}"
-            ))
-        })?;
-
-    // Call installTemporaryAddon
-    let install_msg = serde_json::json!({
-        "type": "installTemporaryAddon",
-        "to": addons_actor,
-        "addonPath": canonical.to_string_lossy(),
-    });
-    let install_response = rdp_call(&mut stream, &install_msg.to_string())
-        .await
-        .map_err(|e| Error::CommandFailed(format!("RDP installTemporaryAddon call failed: {e}")))?;
-    tracing::debug!(install = %install_response, "RDP installTemporaryAddon");
-
-    // Check for errors in the response
-    let install: serde_json::Value = serde_json::from_str(&install_response).map_err(|e| {
-        Error::CommandFailed(format!(
-            "failed to parse installTemporaryAddon response as JSON: {e}; \
-                 response was: {install_response}"
-        ))
-    })?;
-    if let Some(err) = install.get("error") {
-        let message = install
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown error");
-        return Err(Error::CommandFailed(format!(
-            "installTemporaryAddon failed: {err}: {message}"
-        )));
-    }
-
-    let addon_id = install
-        .get("addon")
-        .and_then(|a| a.get("id"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("<unknown>");
-
-    #[expect(clippy::print_stdout, reason = "command output goes to stdout")]
-    {
-        println!("Loaded extension: {addon_id}");
-    }
-
-    Ok(())
-}
-
-/// Read a single RDP message from the stream.
-///
-/// The Firefox RDP protocol prefixes each message with its byte length
-/// followed by a colon, e.g. `30:{"type":"greeting","from":"root"}`.
-async fn rdp_read(stream: &mut tokio::net::TcpStream) -> Result<String, Error> {
-    use tokio::io::AsyncReadExt as _;
-
-    // Read the length prefix (digits followed by ':')
-    let mut length_buf = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        stream.read_exact(&mut byte).await?;
-        if byte[0] == b':' {
-            break;
-        }
-        length_buf.push(byte[0]);
-    }
-
-    let length_str = String::from_utf8_lossy(&length_buf);
-    let length: usize = length_str
-        .parse()
-        .map_err(|_e| Error::CommandFailed(format!("invalid RDP length prefix: {length_str}")))?;
-
-    // Read exactly `length` bytes of JSON
-    let mut json_buf = vec![0u8; length];
-    stream.read_exact(&mut json_buf).await?;
-
-    String::from_utf8(json_buf)
-        .map_err(|e| Error::CommandFailed(format!("invalid UTF-8 in RDP response: {e}")))
-}
-
-/// Send an RDP message and read the response.
-async fn rdp_call(stream: &mut tokio::net::TcpStream, message: &str) -> Result<String, Error> {
-    use tokio::io::AsyncWriteExt as _;
-
-    let payload = format!("{}:{message}", message.len());
-    stream.write_all(payload.as_bytes()).await?;
-    stream.flush().await?;
-
-    rdp_read(stream).await
-}
-
 /// Main application logic.
 ///
 /// # Errors
@@ -2399,7 +1348,7 @@ async fn do_stuff() -> Result<(), Error> {
             return Ok(());
         }
         Command::Instances => {
-            let instances = discover_instances().await?;
+            let instances = browser_controller_client::discover_instances().await?;
             match cli.output {
                 OutputFormat::Human => print_instances_human(&instances)?,
                 OutputFormat::Json => print_instances_json(&instances)?,
@@ -2411,16 +1360,40 @@ async fn do_stuff() -> Result<(), Error> {
             mediator_path,
             extension_id,
         } => {
-            install_manifest(
-                *browser,
+            let result = browser_controller_client::install_manifest(
+                (*browser).into(),
                 mediator_path.clone(),
                 extension_id.clone(),
-                cli.output,
             )?;
+            #[expect(
+                clippy::print_stdout,
+                reason = "manifest installation result goes to stdout by design"
+            )]
+            match cli.output {
+                OutputFormat::Human => {
+                    println!("Installed manifest to {}", result.manifest_path.display());
+                    #[cfg(target_os = "windows")]
+                    {
+                        let client_browser: browser_controller_client::BrowserTarget =
+                            (*browser).into();
+                        println!(
+                            "Registered in HKCU\\{}",
+                            client_browser.windows_registry_key()
+                        );
+                    }
+                }
+                OutputFormat::Json => {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+            }
             return Ok(());
         }
         Command::LoadExtension { path, port } => {
-            load_temporary_extension(path, *port).await?;
+            let addon_id = browser_controller_client::load_temporary_extension(path, *port).await?;
+            #[expect(clippy::print_stdout, reason = "command output goes to stdout")]
+            {
+                println!("Loaded extension: {addon_id}");
+            }
             return Ok(());
         }
         Command::Windows(_)
@@ -2431,9 +1404,10 @@ async fn do_stuff() -> Result<(), Error> {
     }
 
     // Commands that require a browser connection.
-    let instances = discover_instances().await?;
-    let dir = socket_dir()?;
-    let instance = select_instance(&instances, cli.instance.as_deref(), &dir)?;
+    let instances = browser_controller_client::discover_instances().await?;
+    let dir = browser_controller_client::socket_dir()?;
+    let instance =
+        browser_controller_client::select_instance(&instances, cli.instance.as_deref(), &dir)?;
     tracing::debug!(
         browser = %instance.info.browser_name,
         pid = instance.info.pid,
@@ -2466,10 +1440,11 @@ async fn do_stuff() -> Result<(), Error> {
 ///
 /// Returns an error if the command fails.
 async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), Error> {
+    let client = Client::new(instance.socket_path.clone());
     match cli.command {
         Command::Windows(w) => match w.command {
             WindowsCommand::List => {
-                let result = send_command(&instance.socket_path, CliCommand::ListWindows).await?;
+                let result = client.send_command(CliCommand::ListWindows).await?;
                 print_result(&result, cli.output)?;
             }
             WindowsCommand::Open {
@@ -2479,8 +1454,7 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
             } => {
                 // Guard: skip opening if a window with the required prefix already exists.
                 if if_title_prefix_does_not_exist && let Some(ref required_prefix) = title_prefix {
-                    let list_result =
-                        send_command(&instance.socket_path, CliCommand::ListWindows).await?;
+                    let list_result = client.send_command(CliCommand::ListWindows).await?;
                     let CliResult::Windows { windows } = list_result else {
                         return Err(Error::CommandFailed(format!(
                             "unexpected response to ListWindows: {list_result:?}"
@@ -2493,64 +1467,58 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                         return Ok(());
                     }
                 }
-                let result = send_command(
-                    &instance.socket_path,
-                    CliCommand::OpenWindow {
+                let result = client
+                    .send_command(CliCommand::OpenWindow {
                         title_prefix,
                         incognito,
-                    },
-                )
-                .await?;
+                    })
+                    .await?;
                 print_result(&result, cli.output)?;
             }
             WindowsCommand::Close { window } => {
                 // Zero matches is not an error for close — the desired state
                 // (no matching windows exist) is already achieved.
-                let window_ids = match resolve_windows(&instance.socket_path, &window).await {
+                let window_ids = match client.resolve_windows(&(&window).into()).await {
                     Ok(ids) => ids,
-                    Err(Error::NoMatchingWindow { .. }) => Vec::new(),
-                    Err(e) => return Err(e),
+                    Err(browser_controller_client::Error::NoMatchingWindow { .. }) => Vec::new(),
+                    Err(e) => return Err(e.into()),
                 };
                 for window_id in window_ids {
-                    let result =
-                        send_command(&instance.socket_path, CliCommand::CloseWindow { window_id })
-                            .await?;
+                    let result = client
+                        .send_command(CliCommand::CloseWindow { window_id })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             WindowsCommand::SetTitlePrefix { window, prefix } => {
-                let window_ids = resolve_windows(&instance.socket_path, &window).await?;
+                let window_ids = client.resolve_windows(&(&window).into()).await?;
                 for window_id in window_ids {
-                    let result = send_command(
-                        &instance.socket_path,
-                        CliCommand::SetWindowTitlePrefix {
+                    let result = client
+                        .send_command(CliCommand::SetWindowTitlePrefix {
                             window_id,
                             prefix: prefix.clone(),
-                        },
-                    )
-                    .await?;
+                        })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             WindowsCommand::RemoveTitlePrefix { window } => {
-                let window_ids = resolve_windows(&instance.socket_path, &window).await?;
+                let window_ids = client.resolve_windows(&(&window).into()).await?;
                 for window_id in window_ids {
-                    let result = send_command(
-                        &instance.socket_path,
-                        CliCommand::RemoveWindowTitlePrefix { window_id },
-                    )
-                    .await?;
+                    let result = client
+                        .send_command(CliCommand::RemoveWindowTitlePrefix { window_id })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
         },
         Command::Tabs(t) => match t.command {
             TabsCommand::List { window } => {
-                let window_ids = resolve_windows(&instance.socket_path, &window).await?;
+                let window_ids = client.resolve_windows(&(&window).into()).await?;
                 for window_id in window_ids {
-                    let result =
-                        send_command(&instance.socket_path, CliCommand::ListTabs { window_id })
-                            .await?;
+                    let result = client
+                        .send_command(CliCommand::ListTabs { window_id })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
@@ -2567,18 +1535,16 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
             } => {
                 // Guard: skip opening if a tab with the given URL already exists anywhere.
                 if if_url_does_not_exist && let Some(ref check_url) = url {
-                    let list_result =
-                        send_command(&instance.socket_path, CliCommand::ListWindows).await?;
+                    let list_result = client.send_command(CliCommand::ListWindows).await?;
                     let CliResult::Windows { windows } = list_result else {
                         return Err(Error::CommandFailed(format!(
                             "unexpected response to ListWindows: {list_result:?}"
                         )));
                     };
-                    let normalized = strip_url_credentials(check_url);
-                    let already_exists = windows
-                        .iter()
-                        .flat_map(|w| &w.tabs)
-                        .any(|t| strip_url_credentials(&t.url) == normalized);
+                    let normalized = browser_controller_client::strip_url_credentials(check_url);
+                    let already_exists = windows.iter().flat_map(|w| &w.tabs).any(|t| {
+                        browser_controller_client::strip_url_credentials(&t.url) == normalized
+                    });
                     if already_exists {
                         return Ok(());
                     }
@@ -2594,11 +1560,10 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     })
                     .transpose()?;
 
-                let window_ids = resolve_windows(&instance.socket_path, &window).await?;
+                let window_ids = client.resolve_windows(&(&window).into()).await?;
                 for window_id in window_ids {
-                    let result = send_command(
-                        &instance.socket_path,
-                        CliCommand::OpenTab {
+                    let result = client
+                        .send_command(CliCommand::OpenTab {
                             window_id,
                             insert_before_tab_id: before,
                             insert_after_tab_id: after,
@@ -2607,178 +1572,159 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                             password: password.clone(),
                             background,
                             cookie_store_id: container.clone(),
-                        },
-                    )
-                    .await?;
+                        })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Activate { tab } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result =
-                        send_command(&instance.socket_path, CliCommand::ActivateTab { tab_id })
-                            .await?;
+                    let result = client
+                        .send_command(CliCommand::ActivateTab { tab_id })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Navigate { tab, url } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = send_command(
-                        &instance.socket_path,
-                        CliCommand::NavigateTab {
+                    let result = client
+                        .send_command(CliCommand::NavigateTab {
                             tab_id,
                             url: url.clone(),
-                        },
-                    )
-                    .await?;
+                        })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::ReopenInContainer { tab, container } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = send_command(
-                        &instance.socket_path,
-                        CliCommand::ReopenTabInContainer {
+                    let result = client
+                        .send_command(CliCommand::ReopenTabInContainer {
                             tab_id,
                             cookie_store_id: container.clone(),
-                        },
-                    )
-                    .await?;
+                        })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Reload { tab, bypass_cache } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = send_command(
-                        &instance.socket_path,
-                        CliCommand::ReloadTab {
+                    let result = client
+                        .send_command(CliCommand::ReloadTab {
                             tab_id,
                             bypass_cache,
-                        },
-                    )
-                    .await?;
+                        })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Close { tab } => {
                 // Zero matches is not an error for close — the desired state
                 // (no matching tabs exist) is already achieved.
-                let tab_ids = match resolve_tabs(&instance.socket_path, &tab).await {
+                let tab_ids = match client.resolve_tabs(&(&tab).into()).await {
                     Ok(ids) => ids,
-                    Err(Error::NoMatchingTab { .. }) => Vec::new(),
-                    Err(e) => return Err(e),
+                    Err(browser_controller_client::Error::NoMatchingTab { .. }) => Vec::new(),
+                    Err(e) => return Err(e.into()),
                 };
                 for tab_id in tab_ids {
-                    let result =
-                        send_command(&instance.socket_path, CliCommand::CloseTab { tab_id })
-                            .await?;
+                    let result = client.send_command(CliCommand::CloseTab { tab_id }).await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Pin { tab } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result =
-                        send_command(&instance.socket_path, CliCommand::PinTab { tab_id }).await?;
+                    let result = client.send_command(CliCommand::PinTab { tab_id }).await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Unpin { tab } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result =
-                        send_command(&instance.socket_path, CliCommand::UnpinTab { tab_id })
-                            .await?;
+                    let result = client.send_command(CliCommand::UnpinTab { tab_id }).await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::ToggleReaderMode { tab } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = send_command(
-                        &instance.socket_path,
-                        CliCommand::ToggleReaderMode { tab_id },
-                    )
-                    .await?;
+                    let result = client
+                        .send_command(CliCommand::ToggleReaderMode { tab_id })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Discard { tab } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result =
-                        send_command(&instance.socket_path, CliCommand::DiscardTab { tab_id })
-                            .await?;
+                    let result = client
+                        .send_command(CliCommand::DiscardTab { tab_id })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Warmup { tab } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result =
-                        send_command(&instance.socket_path, CliCommand::WarmupTab { tab_id })
-                            .await?;
+                    let result = client
+                        .send_command(CliCommand::WarmupTab { tab_id })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Mute { tab } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result =
-                        send_command(&instance.socket_path, CliCommand::MuteTab { tab_id }).await?;
+                    let result = client.send_command(CliCommand::MuteTab { tab_id }).await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Unmute { tab } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result =
-                        send_command(&instance.socket_path, CliCommand::UnmuteTab { tab_id })
-                            .await?;
+                    let result = client
+                        .send_command(CliCommand::UnmuteTab { tab_id })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Move { tab, new_index } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = send_command(
-                        &instance.socket_path,
-                        CliCommand::MoveTab { tab_id, new_index },
-                    )
-                    .await?;
+                    let result = client
+                        .send_command(CliCommand::MoveTab { tab_id, new_index })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Back { tab, steps } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result =
-                        send_command(&instance.socket_path, CliCommand::GoBack { tab_id, steps })
-                            .await?;
+                    let result = client
+                        .send_command(CliCommand::GoBack { tab_id, steps })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Forward { tab, steps } => {
-                let tab_ids = resolve_tabs(&instance.socket_path, &tab).await?;
+                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = send_command(
-                        &instance.socket_path,
-                        CliCommand::GoForward { tab_id, steps },
-                    )
-                    .await?;
+                    let result = client
+                        .send_command(CliCommand::GoForward { tab_id, steps })
+                        .await?;
                     print_result(&result, cli.output)?;
                 }
             }
             TabsCommand::Sort { window, domains } => {
-                let window_ids = resolve_windows(&instance.socket_path, &window).await?;
+                let window_ids = client.resolve_windows(&(&window).into()).await?;
                 for window_id in window_ids {
-                    let list_tabs_result =
-                        send_command(&instance.socket_path, CliCommand::ListTabs { window_id })
-                            .await?;
+                    let list_tabs_result = client
+                        .send_command(CliCommand::ListTabs { window_id })
+                        .await?;
 
                     let CliResult::Tabs { mut tabs } = list_tabs_result else {
                         return Err(Error::CommandFailed(format!(
@@ -2840,14 +1786,12 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                                 clippy::cast_possible_truncation,
                                 reason = "Tab index values (and for that matter values coming out of enumerate) are small enough that overflows are never an issue"
                             )]
-                            send_command(
-                                &instance.socket_path,
-                                CliCommand::MoveTab {
+                            client
+                                .send_command(CliCommand::MoveTab {
                                     tab_id: tab.id,
                                     new_index: new_index as u32,
-                                },
-                            )
-                            .await?;
+                                })
+                                .await?;
                         }
                     }
                 }
@@ -2859,15 +1803,13 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 limit,
                 query,
             } => {
-                let result = send_command(
-                    &instance.socket_path,
-                    CliCommand::ListDownloads {
+                let result = client
+                    .send_command(CliCommand::ListDownloads {
                         state: state.map(Into::into),
                         limit,
                         query,
-                    },
-                )
-                .await?;
+                    })
+                    .await?;
                 print_result(&result, cli.output)?;
             }
             DownloadsCommand::Start {
@@ -2876,73 +1818,58 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 save_as,
                 conflict_action,
             } => {
-                let result = send_command(
-                    &instance.socket_path,
-                    CliCommand::StartDownload {
+                let result = client
+                    .send_command(CliCommand::StartDownload {
                         url,
                         filename,
                         save_as,
                         conflict_action: conflict_action.map(Into::into),
-                    },
-                )
-                .await?;
+                    })
+                    .await?;
                 print_result(&result, cli.output)?;
             }
             DownloadsCommand::Cancel { id } => {
-                let result = send_command(
-                    &instance.socket_path,
-                    CliCommand::CancelDownload { download_id: id },
-                )
-                .await?;
+                let result = client
+                    .send_command(CliCommand::CancelDownload { download_id: id })
+                    .await?;
                 print_result(&result, cli.output)?;
             }
             DownloadsCommand::Pause { id } => {
-                let result = send_command(
-                    &instance.socket_path,
-                    CliCommand::PauseDownload { download_id: id },
-                )
-                .await?;
+                let result = client
+                    .send_command(CliCommand::PauseDownload { download_id: id })
+                    .await?;
                 print_result(&result, cli.output)?;
             }
             DownloadsCommand::Resume { id } => {
-                let result = send_command(
-                    &instance.socket_path,
-                    CliCommand::ResumeDownload { download_id: id },
-                )
-                .await?;
+                let result = client
+                    .send_command(CliCommand::ResumeDownload { download_id: id })
+                    .await?;
                 print_result(&result, cli.output)?;
             }
             DownloadsCommand::Retry { id } => {
-                let result = send_command(
-                    &instance.socket_path,
-                    CliCommand::RetryDownload { download_id: id },
-                )
-                .await?;
+                let result = client
+                    .send_command(CliCommand::RetryDownload { download_id: id })
+                    .await?;
                 print_result(&result, cli.output)?;
             }
             DownloadsCommand::Erase { id } => {
-                let result = send_command(
-                    &instance.socket_path,
-                    CliCommand::EraseDownload { download_id: id },
-                )
-                .await?;
+                let result = client
+                    .send_command(CliCommand::EraseDownload { download_id: id })
+                    .await?;
                 print_result(&result, cli.output)?;
             }
             DownloadsCommand::Clear { state } => {
-                let result = send_command(
-                    &instance.socket_path,
-                    CliCommand::EraseAllDownloads {
+                let result = client
+                    .send_command(CliCommand::EraseAllDownloads {
                         state: state.map(Into::into),
-                    },
-                )
-                .await?;
+                    })
+                    .await?;
                 print_result(&result, cli.output)?;
             }
         },
         Command::Containers(c) => match c.command {
             ContainersCommand::List => {
-                let result =
-                    send_command(&instance.socket_path, CliCommand::ListContainers).await?;
+                let result = client.send_command(CliCommand::ListContainers).await?;
                 print_result(&result, cli.output)?;
             }
         },
@@ -3045,21 +1972,21 @@ async fn main() {
 
 #[cfg(test)]
 mod test {
-    use browser_controller_types::{TabDetails, TabStatus, WindowState, WindowSummary};
-
-    use super::{TabMatcher, WindowMatcher, match_tabs, match_windows};
+    use browser_controller_client::{
+        TabDetails, TabStatus, WindowState, WindowSummary, match_tabs, match_windows,
+    };
 
     /// Build a minimal [`WindowSummary`] for use in tests.
     fn make_window(id: u32, title: &str) -> WindowSummary {
-        WindowSummary {
+        WindowSummary::new(
             id,
-            title: title.to_owned(),
-            title_prefix: None,
-            is_focused: false,
-            is_last_focused: false,
-            state: WindowState::Normal,
-            tabs: vec![],
-        }
+            title.to_owned(),
+            None,
+            false,
+            false,
+            WindowState::Normal,
+            vec![],
+        )
     }
 
     /// Builder for [`TabDetails`] with sensible defaults.
@@ -3068,48 +1995,53 @@ mod test {
     /// a safe zero/false/None value. Call setter methods for fields your test
     /// cares about, then `.build()`.
     struct TabBuilder {
+        /// The inner tab details being constructed.
         inner: TabDetails,
     }
 
     impl TabBuilder {
+        /// Create a new builder with the given tab and window IDs.
         fn new(id: u32, window_id: u32) -> Self {
             Self {
-                inner: TabDetails {
+                inner: TabDetails::new(
                     id,
-                    index: 0,
+                    0,
                     window_id,
-                    title: String::new(),
-                    url: String::new(),
-                    is_active: false,
-                    is_pinned: false,
-                    is_discarded: false,
-                    is_audible: false,
-                    is_muted: false,
-                    status: TabStatus::Complete,
-                    has_attention: false,
-                    is_awaiting_auth: false,
-                    is_in_reader_mode: false,
-                    incognito: false,
-                    history_length: 0,
-                    history_steps_back: None,
-                    history_steps_forward: None,
-                    history_hidden_count: None,
-                    cookie_store_id: None,
-                    container_name: None,
-                },
+                    String::new(),
+                    String::new(),
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    TabStatus::Complete,
+                    false,
+                    false,
+                    false,
+                    false,
+                    0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
             }
         }
 
+        /// Set the tab title.
         fn title(mut self, t: &str) -> Self {
             self.inner.title = t.to_owned();
             self
         }
 
+        /// Set the tab URL.
         fn url(mut self, u: &str) -> Self {
             self.inner.url = u.to_owned();
             self
         }
 
+        /// Build the final [`TabDetails`].
         fn build(self) -> TabDetails {
             self.inner
         }
@@ -3124,7 +2056,7 @@ mod test {
     #[test]
     fn match_windows_by_id() -> Result<(), crate::Error> {
         let windows = vec![make_window(1, "Window One"), make_window(2, "Window Two")];
-        let m = WindowMatcher {
+        let m = browser_controller_client::WindowMatcher {
             window_id: Some(1),
             ..Default::default()
         };
@@ -3137,7 +2069,7 @@ mod test {
     #[test]
     fn match_windows_by_title() -> Result<(), crate::Error> {
         let windows = vec![make_window(1, "Work"), make_window(2, "Personal")];
-        let m = WindowMatcher {
+        let m = browser_controller_client::WindowMatcher {
             window_title: Some("Work".to_owned()),
             ..Default::default()
         };
@@ -3153,7 +2085,7 @@ mod test {
             make_tab(10, 1, "Tab A", "https://example.com"),
             make_tab(11, 1, "Tab B", "https://other.com"),
         ];
-        let m = TabMatcher {
+        let m = browser_controller_client::TabMatcher {
             tab_id: Some(10),
             ..Default::default()
         };
@@ -3169,7 +2101,7 @@ mod test {
             make_tab(10, 1, "Dashboard", "https://example.com"),
             make_tab(11, 1, "Settings", "https://example.com/settings"),
         ];
-        let m = TabMatcher {
+        let m = browser_controller_client::TabMatcher {
             tab_title: Some("Dashboard".to_owned()),
             ..Default::default()
         };

@@ -294,10 +294,7 @@ where
                 CliOutcome::Err("mediator shut down before response arrived".to_owned())
             }
         };
-        let response = CliResponse {
-            request_id,
-            outcome,
-        };
+        let response = CliResponse::new(request_id, outcome);
         write_cli_response(&mut write_half, &response).await?;
     }
     Ok(())
@@ -605,41 +602,13 @@ fn read_parent_profile_id(ppid: u32) -> Option<String> {
 
 /// Return the directory in which IPC socket/marker files are stored.
 ///
-/// - Linux: `$XDG_RUNTIME_DIR/browser-controller/`
-/// - macOS: `$TMPDIR/browser-controller/` (user-private, set by launchd; falls back to
-///   `~/Library/Caches/browser-controller/` if `$TMPDIR` is unset)
-/// - Windows: `%LOCALAPPDATA%\Temp\browser-controller\`
+/// Delegates to [`browser_controller_client::socket_dir`].
 ///
 /// # Errors
 ///
 /// Returns [`Error::NoRuntimeDir`] when the platform base directory cannot be determined.
 fn socket_dir() -> Result<std::path::PathBuf, Error> {
-    #[cfg(target_os = "linux")]
-    {
-        let runtime = std::env::var("XDG_RUNTIME_DIR").map_err(|_not_set| Error::NoRuntimeDir)?;
-        Ok(std::path::Path::new(&runtime).join("browser-controller"))
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // $TMPDIR on macOS is set by launchd to a user-private path like
-        // /var/folders/<xx>/<yy>/T/ (mode 0700). Do NOT fall back to /tmp
-        // which is world-writable. Use ~/Library/Caches as a last resort.
-        let dir = std::env::var("TMPDIR")
-            .map(|t| std::path::Path::new(&t).join("browser-controller"))
-            .or_else(|_| {
-                directories::BaseDirs::new()
-                    .map(|b| b.cache_dir().join("browser-controller"))
-                    .ok_or(Error::NoRuntimeDir)
-            })?;
-        Ok(dir)
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let local = std::env::var("LOCALAPPDATA").map_err(|_| Error::NoRuntimeDir)?;
-        Ok(std::path::Path::new(&local)
-            .join("Temp")
-            .join("browser-controller"))
-    }
+    browser_controller_client::socket_dir().map_err(|_e| Error::NoRuntimeDir)
 }
 
 /// Determine the IPC path for the given parent PID.
@@ -780,13 +749,13 @@ async fn run() -> Result<(), Error> {
         match ext_msg_rx.recv().await {
             Some(Ok(Some(ExtensionMessage::Hello(hello)))) => {
                 let profile_id = read_parent_profile_id(ppid_u32);
-                let info = browser_controller_types::BrowserInfo {
-                    browser_name: hello.browser_name.clone(),
-                    browser_vendor: hello.browser_vendor.clone(),
-                    browser_version: hello.browser_version.clone(),
-                    pid: ppid_u32,
-                    profile_id: profile_id.clone(),
-                };
+                let info = browser_controller_types::BrowserInfo::new(
+                    hello.browser_name.clone(),
+                    hello.browser_vendor.clone(),
+                    hello.browser_version.clone(),
+                    ppid_u32,
+                    profile_id.clone(),
+                );
                 let vendor_str = hello
                     .browser_vendor
                     .as_deref()
@@ -815,6 +784,9 @@ async fn run() -> Result<(), Error> {
             }
             Some(Ok(Some(ExtensionMessage::Event { .. }))) => {
                 tracing::debug!("Received browser event before Hello; ignoring");
+            }
+            Some(Ok(Some(_))) => {
+                tracing::debug!("Received unknown extension message before Hello; ignoring");
             }
             Some(Ok(None)) | None => return Err(Error::NativeMessagingClosedBeforeHello),
             Some(Err(e)) => return Err(e),
@@ -848,6 +820,9 @@ async fn run() -> Result<(), Error> {
                         // .send() returns Err only if there are no receivers; that's fine.
                         drop(event_tx.send(event));
                     }
+                    Some(Ok(Some(_))) => {
+                        tracing::debug!("Received unknown extension message; ignoring");
+                    }
                     Some(Ok(None)) | None => {
                         tracing::info!("Extension disconnected; shutting down");
                         break;
@@ -871,10 +846,7 @@ async fn run() -> Result<(), Error> {
                     );
                     drop(pending_req.response_tx.send(outcome));
                 } else {
-                    let ext_req = CliRequest {
-                        request_id: request_id.clone(),
-                        command: pending_req.command,
-                    };
+                    let ext_req = CliRequest::new(request_id.clone(), pending_req.command);
                     match write_native_message(&mut stdout, &ext_req).await {
                         Ok(()) => {
                             let _prev = pending.insert(request_id, pending_req.response_tx);
