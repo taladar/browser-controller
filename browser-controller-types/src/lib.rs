@@ -60,6 +60,11 @@ pub struct TabSummary {
     /// Firefox-specific; `None` on browsers that don't support containers.
     #[serde(default)]
     pub cookie_store_id: Option<String>,
+    /// The human-readable container name (e.g. "Work", "Personal").
+    ///
+    /// Firefox-specific; `None` on browsers that don't support containers.
+    #[serde(default)]
+    pub container_name: Option<String>,
 }
 
 /// A summary of a browser window including its tabs.
@@ -263,6 +268,11 @@ pub struct TabDetails {
     /// Firefox-specific; `None` on browsers that don't support containers.
     #[serde(default)]
     pub cookie_store_id: Option<String>,
+    /// The human-readable container name (e.g. "Work", "Personal").
+    ///
+    /// Firefox-specific; `None` on browsers that don't support containers.
+    #[serde(default)]
+    pub container_name: Option<String>,
 }
 
 /// Information about a Firefox container (contextual identity).

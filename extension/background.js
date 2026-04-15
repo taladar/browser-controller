@@ -1000,6 +1000,32 @@ async function cmdReopenTabInContainer(tabId, cookieStoreId) {
 }
 
 // ---------------------------------------------------------------------------
+// Container name resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a cookieStoreId to a human-readable container name.
+ *
+ * Returns null on Chrome or when the identity is not found.
+ *
+ * @param {string|undefined|null} cookieStoreId
+ * @returns {Promise<string|null>}
+ */
+async function resolveContainerName(cookieStoreId) {
+  if (!cookieStoreId || !isFirefox || !browser.contextualIdentities) {
+    return null;
+  }
+  try {
+    const identity = await browser.contextualIdentities.get(cookieStoreId);
+    return identity?.name ?? null;
+  } catch {
+    // cookieStoreId is "firefox-default" or "firefox-private" which are not
+    // contextual identities — contextualIdentities.get() throws for them.
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Serialization helpers
 // ---------------------------------------------------------------------------
 
@@ -1097,7 +1123,7 @@ async function serializeWindowSummary(win, lastFocusedId) {
     is_focused: win.focused,
     is_last_focused: win.id === lastFocusedId,
     state: win.state ?? "normal",
-    tabs: (win.tabs ?? []).map(serializeTabSummary),
+    tabs: await Promise.all((win.tabs ?? []).map(serializeTabSummary)),
   };
 }
 
@@ -1105,9 +1131,9 @@ async function serializeWindowSummary(win, lastFocusedId) {
  * Serialize a browser `tabs.Tab` to a `TabSummary` (brief view for window listings).
  *
  * @param {browser.tabs.Tab} tab
- * @returns {object}
+ * @returns {Promise<object>}
  */
-function serializeTabSummary(tab) {
+async function serializeTabSummary(tab) {
   return {
     id: tab.id,
     index: tab.index,
@@ -1115,6 +1141,7 @@ function serializeTabSummary(tab) {
     url: tab.url ?? "",
     is_active: tab.active,
     cookie_store_id: tab.cookieStoreId ?? null,
+    container_name: await resolveContainerName(tab.cookieStoreId),
   };
 }
 
@@ -1198,6 +1225,7 @@ async function serializeTabDetails(tab) {
     history_steps_forward,
     history_hidden_count,
     cookie_store_id: tab.cookieStoreId ?? null,
+    container_name: await resolveContainerName(tab.cookieStoreId),
   };
 }
 

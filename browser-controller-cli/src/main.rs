@@ -532,7 +532,10 @@ pub struct TabMatcher {
     pub tab_status: Option<TabStatusArg>,
     /// Match only tabs in a specific Firefox container (by cookie store ID).
     #[clap(long)]
-    pub tab_container: Option<String>,
+    pub tab_cookie_store_id: Option<String>,
+    /// Match only tabs in a specific Firefox container (by container name).
+    #[clap(long)]
+    pub tab_container_name: Option<String>,
     /// How to handle a criterion that matches multiple tabs.
     ///
     /// `abort` (the default) treats more than one match as an error.
@@ -617,8 +620,11 @@ impl std::fmt::Display for TabMatcher {
         if let Some(status) = self.tab_status {
             parts.push(format!("tab-status={status:?}"));
         }
-        if let Some(ref container) = self.tab_container {
-            parts.push(format!("tab-container={container:?}"));
+        if let Some(ref id) = self.tab_cookie_store_id {
+            parts.push(format!("tab-cookie-store-id={id:?}"));
+        }
+        if let Some(ref name) = self.tab_container_name {
+            parts.push(format!("tab-container-name={name:?}"));
         }
         if parts.is_empty() {
             write!(f, "(all tabs)")
@@ -1571,7 +1577,11 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
                     yn(tab.incognito),
                 );
                 if let Some(ref cid) = tab.cookie_store_id {
-                    println!("  Container: {cid}");
+                    if let Some(ref name) = tab.container_name {
+                        println!("  Container: {name} ({cid})");
+                    } else {
+                        println!("  Container: {cid}");
+                    }
                 }
             }
         }
@@ -2025,8 +2035,13 @@ fn match_tabs(tabs: &[TabDetails], m: &TabMatcher) -> Result<Vec<u32>, Error> {
             {
                 return false;
             }
-            if let Some(ref container) = m.tab_container
-                && tab.cookie_store_id.as_deref() != Some(container.as_str())
+            if let Some(ref id) = m.tab_cookie_store_id
+                && tab.cookie_store_id.as_deref() != Some(id.as_str())
+            {
+                return false;
+            }
+            if let Some(ref name) = m.tab_container_name
+                && tab.container_name.as_deref() != Some(name.as_str())
             {
                 return false;
             }
@@ -3047,30 +3062,62 @@ mod test {
         }
     }
 
-    /// Build a minimal [`TabDetails`] for use in tests.
-    fn make_tab(id: u32, window_id: u32, title: &str, url: &str) -> TabDetails {
-        TabDetails {
-            id,
-            index: 0,
-            window_id,
-            title: title.to_owned(),
-            url: url.to_owned(),
-            is_active: false,
-            is_pinned: false,
-            is_discarded: false,
-            is_audible: false,
-            is_muted: false,
-            status: TabStatus::Complete,
-            has_attention: false,
-            is_awaiting_auth: false,
-            is_in_reader_mode: false,
-            incognito: false,
-            history_length: 0,
-            history_steps_back: None,
-            history_steps_forward: None,
-            history_hidden_count: None,
-            cookie_store_id: None,
+    /// Builder for [`TabDetails`] with sensible defaults.
+    ///
+    /// Only `id` and `window_id` are required; everything else defaults to
+    /// a safe zero/false/None value. Call setter methods for fields your test
+    /// cares about, then `.build()`.
+    struct TabBuilder {
+        inner: TabDetails,
+    }
+
+    impl TabBuilder {
+        fn new(id: u32, window_id: u32) -> Self {
+            Self {
+                inner: TabDetails {
+                    id,
+                    index: 0,
+                    window_id,
+                    title: String::new(),
+                    url: String::new(),
+                    is_active: false,
+                    is_pinned: false,
+                    is_discarded: false,
+                    is_audible: false,
+                    is_muted: false,
+                    status: TabStatus::Complete,
+                    has_attention: false,
+                    is_awaiting_auth: false,
+                    is_in_reader_mode: false,
+                    incognito: false,
+                    history_length: 0,
+                    history_steps_back: None,
+                    history_steps_forward: None,
+                    history_hidden_count: None,
+                    cookie_store_id: None,
+                    container_name: None,
+                },
+            }
         }
+
+        fn title(mut self, t: &str) -> Self {
+            self.inner.title = t.to_owned();
+            self
+        }
+
+        fn url(mut self, u: &str) -> Self {
+            self.inner.url = u.to_owned();
+            self
+        }
+
+        fn build(self) -> TabDetails {
+            self.inner
+        }
+    }
+
+    /// Shorthand for building a tab with an ID, window ID, title, and URL.
+    fn make_tab(id: u32, window_id: u32, title: &str, url: &str) -> TabDetails {
+        TabBuilder::new(id, window_id).title(title).url(url).build()
     }
 
     /// Verify that `--window-id` selects exactly the window with that ID.

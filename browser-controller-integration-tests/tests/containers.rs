@@ -357,10 +357,68 @@ async fn cli_containers_list_firefox() {
     .await;
 }
 
-// --- CLI: --tab-container matcher ---
+// --- container_name populated in tab details ---
 
 #[expect(clippy::panic, reason = "test assertions")]
-async fn cli_tab_container_matcher_body(h: &Harness) {
+async fn container_name_in_tab_details_body(h: &Harness) {
+    let server = test_server::Server::start_plain();
+    let window_id = first_window_id(h).await;
+
+    let containers_result = h
+        .send_command(CliCommand::ListContainers)
+        .await
+        .expect("ListContainers should succeed");
+    let (container_id, container_name) = match &containers_result {
+        CliResult::Containers { containers } => {
+            assert!(!containers.is_empty(), "need a container");
+            let c = containers.first().expect("just asserted");
+            (c.cookie_store_id.clone(), c.name.clone())
+        }
+        other => panic!("expected Containers, got {other:?}"),
+    };
+
+    let open_result = h
+        .send_command(CliCommand::OpenTab {
+            window_id,
+            insert_before_tab_id: None,
+            insert_after_tab_id: None,
+            url: Some(server.base_url()),
+            username: None,
+            password: None,
+            background: true,
+            cookie_store_id: Some(container_id),
+        })
+        .await
+        .expect("OpenTab should succeed");
+    let tab_id = match open_result {
+        CliResult::Tab(d) => {
+            pretty_assertions::assert_eq!(
+                d.container_name.as_deref(),
+                Some(container_name.as_str()),
+                "OpenTab response should include container_name",
+            );
+            d.id
+        }
+        other => panic!("expected Tab, got {other:?}"),
+    };
+
+    h.send_command(CliCommand::CloseTab { tab_id })
+        .await
+        .expect("cleanup");
+}
+
+#[tokio::test]
+async fn container_name_in_tab_details_firefox() {
+    harness::run(browser::Kind::Firefox, |h| {
+        Box::pin(container_name_in_tab_details_body(h))
+    })
+    .await;
+}
+
+// --- CLI: --tab-cookie-store-id matcher ---
+
+#[expect(clippy::panic, reason = "test assertions")]
+async fn cli_tab_cookie_store_id_matcher_body(h: &Harness) {
     let server = test_server::Server::start_plain();
     let window_id = first_window_id(h).await;
 
@@ -407,7 +465,7 @@ async fn cli_tab_container_matcher_body(h: &Harness) {
         &[
             "tabs",
             "activate",
-            "--tab-container",
+            "--tab-cookie-store-id",
             &container_id,
             "--tab-window-id",
             &w,
@@ -428,9 +486,81 @@ async fn cli_tab_container_matcher_body(h: &Harness) {
 }
 
 #[tokio::test]
-async fn cli_tab_container_matcher_firefox() {
+async fn cli_tab_cookie_store_id_matcher_firefox() {
     harness::run(browser::Kind::Firefox, |h| {
-        Box::pin(cli_tab_container_matcher_body(h))
+        Box::pin(cli_tab_cookie_store_id_matcher_body(h))
+    })
+    .await;
+}
+
+// --- CLI: --tab-container-name matcher ---
+
+#[expect(clippy::panic, reason = "test assertions")]
+async fn cli_tab_container_name_matcher_body(h: &Harness) {
+    let server = test_server::Server::start_plain();
+    let window_id = first_window_id(h).await;
+
+    let containers_result = h
+        .send_command(CliCommand::ListContainers)
+        .await
+        .expect("ListContainers should succeed");
+    let (container_id, container_name) = match &containers_result {
+        CliResult::Containers { containers } => {
+            assert!(!containers.is_empty(), "need a container");
+            let c = containers.first().expect("just asserted");
+            (c.cookie_store_id.clone(), c.name.clone())
+        }
+        other => panic!("expected Containers, got {other:?}"),
+    };
+
+    let open_result = h
+        .send_command(CliCommand::OpenTab {
+            window_id,
+            insert_before_tab_id: None,
+            insert_after_tab_id: None,
+            url: Some(server.base_url()),
+            username: None,
+            password: None,
+            background: true,
+            cookie_store_id: Some(container_id),
+        })
+        .await
+        .expect("OpenTab should succeed");
+    let tab_id = match open_result {
+        CliResult::Tab(d) => d.id,
+        other => panic!("expected Tab, got {other:?}"),
+    };
+
+    let w = window_id.to_string();
+    let stdout = run_cli(
+        h,
+        &[
+            "tabs",
+            "activate",
+            "--tab-container-name",
+            &container_name,
+            "--tab-window-id",
+            &w,
+        ],
+    )
+    .await;
+    let result: CliResult = serde_json::from_str(stdout.trim()).expect("parse");
+    match result {
+        CliResult::Tab(d) => {
+            pretty_assertions::assert_eq!(d.id, tab_id, "should match by container name");
+        }
+        other => panic!("expected Tab, got {other:?}"),
+    }
+
+    h.send_command(CliCommand::CloseTab { tab_id })
+        .await
+        .expect("cleanup");
+}
+
+#[tokio::test]
+async fn cli_tab_container_name_matcher_firefox() {
+    harness::run(browser::Kind::Firefox, |h| {
+        Box::pin(cli_tab_container_name_matcher_body(h))
     })
     .await;
 }
