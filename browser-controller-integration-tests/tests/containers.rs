@@ -11,7 +11,7 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
-use browser_controller_client::OpenTabParams;
+use browser_controller_client::OpenTabParamsBuilder;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
@@ -105,10 +105,13 @@ async fn open_tab_in_container_body(h: &Harness) {
         .clone();
 
     // Open a tab in that container
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some(server.base_url());
-    params.background = true;
-    params.cookie_store_id = Some(container_id.clone());
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url(server.base_url())
+        .background(true)
+        .cookie_store_id(container_id.clone())
+        .build()
+        .expect("build OpenTabParams");
     let tab = h
         .client()
         .open_tab(params)
@@ -178,10 +181,13 @@ async fn reopen_tab_in_container_body(h: &Harness) {
 
     // Open a tab in container1
     let url = server.base_url();
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some(url.clone());
-    params.background = true;
-    params.cookie_store_id = Some(container1);
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url(url.clone())
+        .background(true)
+        .cookie_store_id(container1)
+        .build()
+        .expect("build OpenTabParams");
     let tab = h
         .client()
         .open_tab(params)
@@ -227,9 +233,12 @@ async fn tab_cookie_store_id_in_listing_body(h: &Harness) {
     let window_id = first_window_id(h).await;
 
     // Open a tab
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some("about:blank".to_owned());
-    params.background = true;
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url("about:blank")
+        .background(true)
+        .build()
+        .expect("build OpenTabParams");
     let tab = h
         .client()
         .open_tab(params)
@@ -317,10 +326,13 @@ async fn container_name_in_tab_details_body(h: &Harness) {
     let container_id = c.cookie_store_id.clone();
     let container_name = c.name.clone();
 
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some(server.base_url());
-    params.background = true;
-    params.cookie_store_id = Some(container_id);
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url(server.base_url())
+        .background(true)
+        .cookie_store_id(container_id)
+        .build()
+        .expect("build OpenTabParams");
     let tab = h
         .client()
         .open_tab(params)
@@ -366,10 +378,13 @@ async fn cli_tab_cookie_store_id_matcher_body(h: &Harness) {
         .clone();
 
     // Open tab in that container
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some(server.base_url());
-    params.background = true;
-    params.cookie_store_id = Some(container_id.clone());
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url(server.base_url())
+        .background(true)
+        .cookie_store_id(container_id.clone())
+        .build()
+        .expect("build OpenTabParams");
     let tab = h
         .client()
         .open_tab(params)
@@ -427,10 +442,13 @@ async fn cli_tab_container_name_matcher_body(h: &Harness) {
     let container_id = c.cookie_store_id.clone();
     let container_name = c.name.clone();
 
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some(server.base_url());
-    params.background = true;
-    params.cookie_store_id = Some(container_id);
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url(server.base_url())
+        .background(true)
+        .cookie_store_id(container_id)
+        .build()
+        .expect("build OpenTabParams");
     let tab = h
         .client()
         .open_tab(params)

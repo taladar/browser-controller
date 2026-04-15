@@ -12,7 +12,7 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
-use browser_controller_client::OpenTabParams;
+use browser_controller_client::OpenTabParamsBuilder;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
@@ -74,11 +74,14 @@ async fn auth_credentials_body(h: &Harness) {
 
     // Open tab with username/password — the extension provides credentials
     // via onAuthRequired asynchronously; OpenTab returns immediately.
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some(auth_url.clone());
-    params.username = Some("testuser".to_owned());
-    params.password = Some("testpass".to_owned());
-    params.background = true;
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url(auth_url.clone())
+        .username("testuser")
+        .password("testpass")
+        .background(true)
+        .build()
+        .expect("build OpenTabParams");
     let tab = h
         .client()
         .open_tab(params)

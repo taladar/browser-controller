@@ -6,8 +6,8 @@
 use std::time::Duration;
 
 use browser_controller_client::{
-    CliResult, Client, CookieStoreId, DiscoveredInstance, DownloadId, OpenTabParams, TabId,
-    TabStatus, WindowId, WindowState,
+    BooleanCondition, CliResult, Client, CookieStoreId, DiscoveredInstance, DownloadId,
+    OpenTabParamsBuilder, TabId, TabStatus, WindowId, WindowState,
 };
 use tracing_subscriber::{
     EnvFilter, Layer as _, Registry, filter::LevelFilter, layer::SubscriberExt as _,
@@ -53,11 +53,27 @@ pub enum Error {
     /// Shell completion generation failed.
     #[error("failed to generate shell completion: {0}")]
     GenerateShellCompletion(#[source] std::io::Error),
+
+    /// A window matcher could not be built.
+    #[error("invalid window matcher: {0}")]
+    WindowMatcherBuild(#[from] browser_controller_client::WindowMatcherBuilderError),
+
+    /// A tab matcher could not be built.
+    #[error("invalid tab matcher: {0}")]
+    TabMatcherBuild(#[from] browser_controller_client::TabMatcherBuilderError),
+
+    /// An instance matcher could not be built.
+    #[error("invalid instance matcher: {0}")]
+    InstanceMatcherBuild(#[from] browser_controller_client::InstanceMatcherBuilderError),
+
+    /// Open-tab parameters could not be built.
+    #[error("invalid open-tab params: {0}")]
+    OpenTabParamsBuild(#[from] browser_controller_client::OpenTabParamsBuilderError),
 }
 
 /// Browser to install the native messaging host manifest for (CLI argument type).
 ///
-/// Mirrors [`browser_controller_client::BrowserTarget`] but derives [`clap::ValueEnum`]
+/// Mirrors [`browser_controller_client::BrowserKind`] but derives [`clap::ValueEnum`]
 /// to allow direct CLI parsing.
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliBrowserTarget {
@@ -77,9 +93,9 @@ pub enum CliBrowserTarget {
     Edge,
 }
 
-impl From<CliBrowserTarget> for browser_controller_client::BrowserTarget {
+impl From<CliBrowserTarget> for browser_controller_client::BrowserKind {
     /// Convert a [`CliBrowserTarget`] CLI value into the client library's
-    /// [`BrowserTarget`](browser_controller_client::BrowserTarget) type.
+    /// [`BrowserKind`](browser_controller_client::BrowserKind) type.
     fn from(value: CliBrowserTarget) -> Self {
         match value {
             CliBrowserTarget::Firefox => Self::Firefox,
@@ -118,6 +134,22 @@ impl From<CliMultipleMatchBehavior> for browser_controller_client::MultipleMatch
             CliMultipleMatchBehavior::Abort => Self::Abort,
             CliMultipleMatchBehavior::All => Self::All,
         }
+    }
+}
+
+/// Convert a pair of positive/negative boolean CLI flags into an optional
+/// [`BooleanCondition`].
+///
+/// When `positive` is `true`, returns `Some(BooleanCondition::Is)`. When `negative`
+/// is `true`, returns `Some(BooleanCondition::IsNot)`. When both are `false` (the
+/// default), returns `None` (no filtering). Clap `conflicts_with` prevents both
+/// being `true` simultaneously.
+#[must_use]
+const fn bool_pair_to_condition(positive: bool, negative: bool) -> Option<BooleanCondition> {
+    match (positive, negative) {
+        (true, false) => Some(BooleanCondition::Is),
+        (false, true) => Some(BooleanCondition::IsNot),
+        _ => None,
     }
 }
 
@@ -215,43 +247,67 @@ pub struct CliWindowMatcher {
     ///
     /// `abort` (the default) treats more than one match as an error.
     /// `all` applies the command to every matched window.
-    #[clap(long, default_value = "abort")]
+    #[clap(long = "if-window-matches-multiple", default_value = "abort")]
     pub if_matches_multiple: CliMultipleMatchBehavior,
 }
 
-impl From<CliWindowMatcher> for browser_controller_client::WindowMatcher {
-    /// Convert the CLI's clap-derived window matcher into the client library's matcher.
-    fn from(m: CliWindowMatcher) -> Self {
-        Self {
-            window_id: m.window_id,
-            window_title: m.window_title,
-            window_title_prefix: m.window_title_prefix,
-            window_title_regex: m.window_title_regex,
-            window_focused: m.window_focused,
-            window_not_focused: m.window_not_focused,
-            window_last_focused: m.window_last_focused,
-            window_not_last_focused: m.window_not_last_focused,
-            window_state: m.window_state.map(Into::into),
-            if_matches_multiple: m.if_matches_multiple.into(),
+impl TryFrom<CliWindowMatcher> for browser_controller_client::WindowMatcher {
+    type Error = Error;
+    fn try_from(m: CliWindowMatcher) -> Result<Self, Self::Error> {
+        let mut b = Self::builder();
+        if let Some(v) = m.window_id {
+            b.window_id(v);
         }
+        if let Some(v) = m.window_title {
+            b.window_title(v);
+        }
+        if let Some(v) = m.window_title_prefix {
+            b.window_title_prefix(v);
+        }
+        if let Some(v) = m.window_title_regex {
+            b.window_title_regex(v);
+        }
+        if let Some(v) = bool_pair_to_condition(m.window_focused, m.window_not_focused) {
+            b.window_focused(v);
+        }
+        if let Some(v) = bool_pair_to_condition(m.window_last_focused, m.window_not_last_focused) {
+            b.window_last_focused(v);
+        }
+        if let Some(v) = m.window_state {
+            b.window_state(WindowState::from(v));
+        }
+        b.if_matches_multiple(m.if_matches_multiple.into());
+        Ok(b.build()?)
     }
 }
 
-impl From<&CliWindowMatcher> for browser_controller_client::WindowMatcher {
-    /// Convert a reference to the CLI's clap-derived window matcher into the client library's matcher.
-    fn from(m: &CliWindowMatcher) -> Self {
-        Self {
-            window_id: m.window_id,
-            window_title: m.window_title.clone(),
-            window_title_prefix: m.window_title_prefix.clone(),
-            window_title_regex: m.window_title_regex.clone(),
-            window_focused: m.window_focused,
-            window_not_focused: m.window_not_focused,
-            window_last_focused: m.window_last_focused,
-            window_not_last_focused: m.window_not_last_focused,
-            window_state: m.window_state.map(Into::into),
-            if_matches_multiple: m.if_matches_multiple.into(),
+impl TryFrom<&CliWindowMatcher> for browser_controller_client::WindowMatcher {
+    type Error = Error;
+    fn try_from(m: &CliWindowMatcher) -> Result<Self, Self::Error> {
+        let mut b = Self::builder();
+        if let Some(v) = m.window_id {
+            b.window_id(v);
         }
+        if let Some(ref v) = m.window_title {
+            b.window_title(v.clone());
+        }
+        if let Some(ref v) = m.window_title_prefix {
+            b.window_title_prefix(v.clone());
+        }
+        if let Some(ref v) = m.window_title_regex {
+            b.window_title_regex(v.clone());
+        }
+        if let Some(v) = bool_pair_to_condition(m.window_focused, m.window_not_focused) {
+            b.window_focused(v);
+        }
+        if let Some(v) = bool_pair_to_condition(m.window_last_focused, m.window_not_last_focused) {
+            b.window_last_focused(v);
+        }
+        if let Some(v) = m.window_state {
+            b.window_state(WindowState::from(v));
+        }
+        b.if_matches_multiple(m.if_matches_multiple.into());
+        Ok(b.build()?)
     }
 }
 
@@ -284,9 +340,6 @@ pub struct CliTabMatcher {
     /// Match tabs whose URL matches this regular expression.
     #[clap(long)]
     pub tab_url_regex: Option<String>,
-    /// Restrict the search to tabs belonging to the window with this ID.
-    #[clap(long)]
-    pub tab_window_id: Option<WindowId>,
     /// Match only the currently active tab in each window.
     #[clap(long)]
     pub tab_active: bool,
@@ -335,6 +388,12 @@ pub struct CliTabMatcher {
     /// Match only tabs not currently displayed in Reader Mode.
     #[clap(long, conflicts_with = "tab_in_reader_mode")]
     pub tab_not_in_reader_mode: bool,
+    /// Match only tabs that have the attention flag set (e.g. unread notification).
+    #[clap(long)]
+    pub tab_has_attention: bool,
+    /// Match only tabs that do not have the attention flag set.
+    #[clap(long, conflicts_with = "tab_has_attention")]
+    pub tab_not_has_attention: bool,
     /// Match only tabs with this loading status.
     #[clap(long)]
     pub tab_status: Option<TabStatusArg>,
@@ -348,77 +407,136 @@ pub struct CliTabMatcher {
     ///
     /// `abort` (the default) treats more than one match as an error.
     /// `all` applies the command to every matched tab.
-    #[clap(long, default_value = "abort")]
+    #[clap(long = "if-tab-matches-multiple", default_value = "abort")]
     pub if_matches_multiple: CliMultipleMatchBehavior,
 }
 
-impl From<CliTabMatcher> for browser_controller_client::TabMatcher {
-    /// Convert the CLI's clap-derived tab matcher into the client library's matcher.
-    fn from(m: CliTabMatcher) -> Self {
-        Self {
-            tab_id: m.tab_id,
-            tab_title: m.tab_title,
-            tab_title_regex: m.tab_title_regex,
-            tab_url: m.tab_url,
-            tab_url_domain: m.tab_url_domain,
-            tab_url_regex: m.tab_url_regex,
-            tab_window_id: m.tab_window_id,
-            tab_active: m.tab_active,
-            tab_not_active: m.tab_not_active,
-            tab_pinned: m.tab_pinned,
-            tab_not_pinned: m.tab_not_pinned,
-            tab_discarded: m.tab_discarded,
-            tab_not_discarded: m.tab_not_discarded,
-            tab_audible: m.tab_audible,
-            tab_not_audible: m.tab_not_audible,
-            tab_muted: m.tab_muted,
-            tab_not_muted: m.tab_not_muted,
-            tab_incognito: m.tab_incognito,
-            tab_not_incognito: m.tab_not_incognito,
-            tab_awaiting_auth: m.tab_awaiting_auth,
-            tab_not_awaiting_auth: m.tab_not_awaiting_auth,
-            tab_in_reader_mode: m.tab_in_reader_mode,
-            tab_not_in_reader_mode: m.tab_not_in_reader_mode,
-            tab_status: m.tab_status.map(Into::into),
-            tab_cookie_store_id: m.tab_cookie_store_id,
-            tab_container_name: m.tab_container_name,
-            if_matches_multiple: m.if_matches_multiple.into(),
+/// Apply an `Option<BooleanCondition>` to a builder setter if present.
+macro_rules! set_bool_condition {
+    ($builder:expr, $setter:ident, $pos:expr, $neg:expr) => {
+        if let Some(v) = bool_pair_to_condition($pos, $neg) {
+            $builder.$setter(v);
         }
+    };
+}
+
+impl TryFrom<CliTabMatcher> for browser_controller_client::TabMatcher {
+    type Error = Error;
+    fn try_from(m: CliTabMatcher) -> Result<Self, Self::Error> {
+        let mut b = Self::builder();
+        if let Some(v) = m.tab_id {
+            b.tab_id(v);
+        }
+        if let Some(v) = m.tab_title {
+            b.tab_title(v);
+        }
+        if let Some(v) = m.tab_title_regex {
+            b.tab_title_regex(v);
+        }
+        if let Some(v) = m.tab_url {
+            b.tab_url(v);
+        }
+        if let Some(v) = m.tab_url_domain {
+            b.tab_url_domain(v);
+        }
+        if let Some(v) = m.tab_url_regex {
+            b.tab_url_regex(v);
+        }
+        set_bool_condition!(b, tab_active, m.tab_active, m.tab_not_active);
+        set_bool_condition!(b, tab_pinned, m.tab_pinned, m.tab_not_pinned);
+        set_bool_condition!(b, tab_discarded, m.tab_discarded, m.tab_not_discarded);
+        set_bool_condition!(b, tab_audible, m.tab_audible, m.tab_not_audible);
+        set_bool_condition!(b, tab_muted, m.tab_muted, m.tab_not_muted);
+        set_bool_condition!(b, tab_incognito, m.tab_incognito, m.tab_not_incognito);
+        set_bool_condition!(
+            b,
+            tab_awaiting_auth,
+            m.tab_awaiting_auth,
+            m.tab_not_awaiting_auth
+        );
+        set_bool_condition!(
+            b,
+            tab_in_reader_mode,
+            m.tab_in_reader_mode,
+            m.tab_not_in_reader_mode
+        );
+        set_bool_condition!(
+            b,
+            tab_has_attention,
+            m.tab_has_attention,
+            m.tab_not_has_attention
+        );
+        if let Some(v) = m.tab_status {
+            b.tab_status(TabStatus::from(v));
+        }
+        if let Some(v) = m.tab_cookie_store_id {
+            b.tab_cookie_store_id(v);
+        }
+        if let Some(v) = m.tab_container_name {
+            b.tab_container_name(v);
+        }
+        b.if_matches_multiple(m.if_matches_multiple.into());
+        Ok(b.build()?)
     }
 }
 
-impl From<&CliTabMatcher> for browser_controller_client::TabMatcher {
-    /// Convert a reference to the CLI's clap-derived tab matcher into the client library's matcher.
-    fn from(m: &CliTabMatcher) -> Self {
-        Self {
-            tab_id: m.tab_id,
-            tab_title: m.tab_title.clone(),
-            tab_title_regex: m.tab_title_regex.clone(),
-            tab_url: m.tab_url.clone(),
-            tab_url_domain: m.tab_url_domain.clone(),
-            tab_url_regex: m.tab_url_regex.clone(),
-            tab_window_id: m.tab_window_id,
-            tab_active: m.tab_active,
-            tab_not_active: m.tab_not_active,
-            tab_pinned: m.tab_pinned,
-            tab_not_pinned: m.tab_not_pinned,
-            tab_discarded: m.tab_discarded,
-            tab_not_discarded: m.tab_not_discarded,
-            tab_audible: m.tab_audible,
-            tab_not_audible: m.tab_not_audible,
-            tab_muted: m.tab_muted,
-            tab_not_muted: m.tab_not_muted,
-            tab_incognito: m.tab_incognito,
-            tab_not_incognito: m.tab_not_incognito,
-            tab_awaiting_auth: m.tab_awaiting_auth,
-            tab_not_awaiting_auth: m.tab_not_awaiting_auth,
-            tab_in_reader_mode: m.tab_in_reader_mode,
-            tab_not_in_reader_mode: m.tab_not_in_reader_mode,
-            tab_status: m.tab_status.map(Into::into),
-            tab_cookie_store_id: m.tab_cookie_store_id.clone(),
-            tab_container_name: m.tab_container_name.clone(),
-            if_matches_multiple: m.if_matches_multiple.into(),
+impl TryFrom<&CliTabMatcher> for browser_controller_client::TabMatcher {
+    type Error = Error;
+    fn try_from(m: &CliTabMatcher) -> Result<Self, Self::Error> {
+        let mut b = Self::builder();
+        if let Some(v) = m.tab_id {
+            b.tab_id(v);
         }
+        if let Some(ref v) = m.tab_title {
+            b.tab_title(v.clone());
+        }
+        if let Some(ref v) = m.tab_title_regex {
+            b.tab_title_regex(v.clone());
+        }
+        if let Some(ref v) = m.tab_url {
+            b.tab_url(v.clone());
+        }
+        if let Some(ref v) = m.tab_url_domain {
+            b.tab_url_domain(v.clone());
+        }
+        if let Some(ref v) = m.tab_url_regex {
+            b.tab_url_regex(v.clone());
+        }
+        set_bool_condition!(b, tab_active, m.tab_active, m.tab_not_active);
+        set_bool_condition!(b, tab_pinned, m.tab_pinned, m.tab_not_pinned);
+        set_bool_condition!(b, tab_discarded, m.tab_discarded, m.tab_not_discarded);
+        set_bool_condition!(b, tab_audible, m.tab_audible, m.tab_not_audible);
+        set_bool_condition!(b, tab_muted, m.tab_muted, m.tab_not_muted);
+        set_bool_condition!(b, tab_incognito, m.tab_incognito, m.tab_not_incognito);
+        set_bool_condition!(
+            b,
+            tab_awaiting_auth,
+            m.tab_awaiting_auth,
+            m.tab_not_awaiting_auth
+        );
+        set_bool_condition!(
+            b,
+            tab_in_reader_mode,
+            m.tab_in_reader_mode,
+            m.tab_not_in_reader_mode
+        );
+        set_bool_condition!(
+            b,
+            tab_has_attention,
+            m.tab_has_attention,
+            m.tab_not_has_attention
+        );
+        if let Some(v) = m.tab_status {
+            b.tab_status(TabStatus::from(v));
+        }
+        if let Some(ref v) = m.tab_cookie_store_id {
+            b.tab_cookie_store_id(v.clone());
+        }
+        if let Some(ref v) = m.tab_container_name {
+            b.tab_container_name(v.clone());
+        }
+        b.if_matches_multiple(m.if_matches_multiple.into());
+        Ok(b.build()?)
     }
 }
 
@@ -486,7 +604,7 @@ pub enum Command {
     /// Manage browser windows.
     Windows(WindowsArgs),
     /// Manage tabs within a browser window.
-    Tabs(TabsArgs),
+    Tabs(Box<TabsArgs>),
     /// Manage downloads.
     Downloads(DownloadsArgs),
     /// Manage Firefox containers (contextual identities).
@@ -676,12 +794,18 @@ pub enum TabsCommand {
     },
     /// Activate a tab, making it the focused tab in its window.
     Activate {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to activate.
         #[clap(flatten)]
         tab: CliTabMatcher,
     },
     /// Navigate an existing tab to a new URL.
     Navigate {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to navigate.
         #[clap(flatten)]
         tab: CliTabMatcher,
@@ -694,6 +818,9 @@ pub enum TabsCommand {
     /// The tabs are closed and new tabs are created in the target container
     /// with the same URLs. Firefox-only.
     ReopenInContainer {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to reopen.
         #[clap(flatten)]
         tab: CliTabMatcher,
@@ -703,6 +830,9 @@ pub enum TabsCommand {
     },
     /// Reload one or more tabs.
     Reload {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to reload.
         #[clap(flatten)]
         tab: CliTabMatcher,
@@ -712,18 +842,27 @@ pub enum TabsCommand {
     },
     /// Close one or more tabs.
     Close {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to close.
         #[clap(flatten)]
         tab: CliTabMatcher,
     },
     /// Pin one or more tabs.
     Pin {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to pin.
         #[clap(flatten)]
         tab: CliTabMatcher,
     },
     /// Unpin one or more tabs.
     Unpin {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to unpin.
         #[clap(flatten)]
         tab: CliTabMatcher,
@@ -732,6 +871,9 @@ pub enum TabsCommand {
     ///
     /// Firefox-only. The tab must be displaying a reader-mode-compatible page.
     ToggleReaderMode {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to toggle.
         #[clap(flatten)]
         tab: CliTabMatcher,
@@ -741,30 +883,45 @@ pub enum TabsCommand {
     /// The tabs remain in the tab strip but their content is freed. They will be
     /// reloaded when activated. The active tab cannot be discarded.
     Discard {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to discard.
         #[clap(flatten)]
         tab: CliTabMatcher,
     },
     /// Warm up one or more discarded tabs, loading their content into memory without activating.
     Warmup {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to warm up.
         #[clap(flatten)]
         tab: CliTabMatcher,
     },
     /// Mute one or more tabs, suppressing any audio they produce.
     Mute {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to mute.
         #[clap(flatten)]
         tab: CliTabMatcher,
     },
     /// Unmute one or more tabs, allowing them to produce audio again.
     Unmute {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to unmute.
         #[clap(flatten)]
         tab: CliTabMatcher,
     },
     /// Move a tab to a new position within its window.
     Move {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to move.
         #[clap(flatten)]
         tab: CliTabMatcher,
@@ -774,6 +931,9 @@ pub enum TabsCommand {
     },
     /// Navigate backward in a tab's session history.
     Back {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to navigate backward.
         #[clap(flatten)]
         tab: CliTabMatcher,
@@ -786,6 +946,9 @@ pub enum TabsCommand {
     },
     /// Navigate forward in a tab's session history.
     Forward {
+        /// Criteria selecting the window(s) to search for tabs.
+        #[clap(flatten)]
+        window: CliWindowMatcher,
         /// Criteria selecting the tab(s) to navigate forward.
         #[clap(flatten)]
         tab: CliTabMatcher,
@@ -1325,7 +1488,7 @@ async fn do_stuff() -> Result<(), Error> {
                     println!("Installed manifest to {}", result.manifest_path.display());
                     #[cfg(target_os = "windows")]
                     {
-                        let client_browser: browser_controller_client::BrowserTarget =
+                        let client_browser: browser_controller_client::BrowserKind =
                             (*browser).into();
                         println!(
                             "Registered in HKCU\\{}",
@@ -1417,7 +1580,7 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
             WindowsCommand::Close { window } => {
                 // Zero matches is not an error for close — the desired state
                 // (no matching windows exist) is already achieved.
-                let window_ids = match client.resolve_windows(&(&window).into()).await {
+                let window_ids = match client.resolve_windows(&((&window).try_into()?)).await {
                     Ok(ids) => ids,
                     Err(browser_controller_client::Error::NoMatchingWindow { .. }) => Vec::new(),
                     Err(e) => return Err(e.into()),
@@ -1428,7 +1591,7 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 }
             }
             WindowsCommand::SetTitlePrefix { window, prefix } => {
-                let window_ids = client.resolve_windows(&(&window).into()).await?;
+                let window_ids = client.resolve_windows(&((&window).try_into()?)).await?;
                 for window_id in window_ids {
                     client
                         .set_window_title_prefix(window_id, prefix.clone())
@@ -1437,7 +1600,7 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 }
             }
             WindowsCommand::RemoveTitlePrefix { window } => {
-                let window_ids = client.resolve_windows(&(&window).into()).await?;
+                let window_ids = client.resolve_windows(&((&window).try_into()?)).await?;
                 for window_id in window_ids {
                     client.remove_window_title_prefix(window_id).await?;
                     print_result(&CliResult::Unit, cli.output)?;
@@ -1446,7 +1609,7 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
         },
         Command::Tabs(t) => match t.command {
             TabsCommand::List { window } => {
-                let window_ids = client.resolve_windows(&(&window).into()).await?;
+                let window_ids = client.resolve_windows(&((&window).try_into()?)).await?;
                 for window_id in window_ids {
                     let tabs = client.list_tabs(window_id).await?;
                     print_result(&CliResult::Tabs { tabs }, cli.output)?;
@@ -1466,10 +1629,10 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 // Guard: skip opening if a tab with the given URL already exists anywhere.
                 if if_url_does_not_exist && let Some(ref check_url) = url {
                     let windows = client.list_windows().await?;
-                    let normalized = browser_controller_client::strip_url_credentials(check_url);
-                    let already_exists = windows.iter().flat_map(|w| &w.tabs).any(|t| {
-                        browser_controller_client::strip_url_credentials(&t.url) == normalized
-                    });
+                    let already_exists = windows
+                        .iter()
+                        .flat_map(|w| &w.tabs)
+                        .any(|t| t.url == *check_url);
                     if already_exists {
                         return Ok(());
                     }
@@ -1485,36 +1648,60 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     })
                     .transpose()?;
 
-                let window_ids = client.resolve_windows(&(&window).into()).await?;
+                let window_ids = client.resolve_windows(&((&window).try_into()?)).await?;
                 for window_id in window_ids {
-                    let mut params = OpenTabParams::new(window_id);
-                    params.insert_before_tab_id = before;
-                    params.insert_after_tab_id = after;
-                    params.url = url.clone();
-                    params.username = username.clone();
-                    params.password = password.clone();
-                    params.background = background;
-                    params.cookie_store_id = container.clone();
+                    let mut b = OpenTabParamsBuilder::default();
+                    b.window_id(window_id);
+                    if let Some(ref v) = before {
+                        b.insert_before_tab_id(*v);
+                    }
+                    if let Some(ref v) = after {
+                        b.insert_after_tab_id(*v);
+                    }
+                    if let Some(ref v) = url {
+                        b.url(v.clone());
+                    }
+                    if let Some(ref v) = username {
+                        b.username(v.clone());
+                    }
+                    if let Some(ref v) = password {
+                        b.password(v.clone());
+                    }
+                    b.background(background);
+                    if let Some(ref v) = container {
+                        b.cookie_store_id(v.clone());
+                    }
+                    let params = b.build()?;
                     let tab = client.open_tab(params).await?;
                     print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
-            TabsCommand::Activate { tab } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::Activate { window, tab } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     client.activate_tab(tab_id).await?;
                     print_result(&CliResult::Unit, cli.output)?;
                 }
             }
-            TabsCommand::Navigate { tab, url } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::Navigate { window, tab, url } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     client.navigate_tab(tab_id, url.clone()).await?;
                     print_result(&CliResult::Unit, cli.output)?;
                 }
             }
-            TabsCommand::ReopenInContainer { tab, container } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::ReopenInContainer {
+                window,
+                tab,
+                container,
+            } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     let tab = client
                         .reopen_tab_in_container(tab_id, container.clone())
@@ -1522,17 +1709,26 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
-            TabsCommand::Reload { tab, bypass_cache } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::Reload {
+                window,
+                tab,
+                bypass_cache,
+            } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     client.reload_tab(tab_id, bypass_cache).await?;
                     print_result(&CliResult::Unit, cli.output)?;
                 }
             }
-            TabsCommand::Close { tab } => {
+            TabsCommand::Close { window, tab } => {
                 // Zero matches is not an error for close — the desired state
                 // (no matching tabs exist) is already achieved.
-                let tab_ids = match client.resolve_tabs(&(&tab).into()).await {
+                let tab_ids = match client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await
+                {
                     Ok(ids) => ids,
                     Err(browser_controller_client::Error::NoMatchingTab { .. }) => Vec::new(),
                     Err(e) => return Err(e.into()),
@@ -1542,78 +1738,102 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     print_result(&CliResult::Unit, cli.output)?;
                 }
             }
-            TabsCommand::Pin { tab } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::Pin { window, tab } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     client.pin_tab(tab_id).await?;
                     print_result(&CliResult::Unit, cli.output)?;
                 }
             }
-            TabsCommand::Unpin { tab } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::Unpin { window, tab } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     client.unpin_tab(tab_id).await?;
                     print_result(&CliResult::Unit, cli.output)?;
                 }
             }
-            TabsCommand::ToggleReaderMode { tab } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::ToggleReaderMode { window, tab } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     client.toggle_reader_mode(tab_id).await?;
                     print_result(&CliResult::Unit, cli.output)?;
                 }
             }
-            TabsCommand::Discard { tab } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::Discard { window, tab } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     client.discard_tab(tab_id).await?;
                     print_result(&CliResult::Unit, cli.output)?;
                 }
             }
-            TabsCommand::Warmup { tab } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::Warmup { window, tab } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     client.warmup_tab(tab_id).await?;
                     print_result(&CliResult::Unit, cli.output)?;
                 }
             }
-            TabsCommand::Mute { tab } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::Mute { window, tab } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     client.mute_tab(tab_id).await?;
                     print_result(&CliResult::Unit, cli.output)?;
                 }
             }
-            TabsCommand::Unmute { tab } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::Unmute { window, tab } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     client.unmute_tab(tab_id).await?;
                     print_result(&CliResult::Unit, cli.output)?;
                 }
             }
-            TabsCommand::Move { tab, new_index } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::Move {
+                window,
+                tab,
+                new_index,
+            } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     let tab = client.move_tab(tab_id, new_index).await?;
                     print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
-            TabsCommand::Back { tab, steps } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::Back { window, tab, steps } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     let tab = client.go_back(tab_id, steps).await?;
                     print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
-            TabsCommand::Forward { tab, steps } => {
-                let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
+            TabsCommand::Forward { window, tab, steps } => {
+                let tab_ids = client
+                    .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
+                    .await?;
                 for tab_id in tab_ids {
                     let tab = client.go_forward(tab_id, steps).await?;
                     print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::Sort { window, domains } => {
-                let window_ids = client.resolve_windows(&(&window).into()).await?;
+                let window_ids = client.resolve_windows(&((&window).try_into()?)).await?;
                 for window_id in window_ids {
                     let mut tabs = client.list_tabs(window_id).await?;
 
@@ -1830,8 +2050,7 @@ async fn main() {
 #[cfg(test)]
 mod test {
     use browser_controller_client::{
-        TabDetails, TabId, TabStatus, WindowId, WindowState, WindowSummary, match_tabs,
-        match_windows,
+        MatchWith as _, TabDetails, TabId, TabStatus, WindowId, WindowState, WindowSummary,
     };
 
     /// Build a minimal [`WindowSummary`] for use in tests.
@@ -1914,12 +2133,11 @@ mod test {
     #[test]
     fn match_windows_by_id() -> Result<(), crate::Error> {
         let windows = vec![make_window(1, "Window One"), make_window(2, "Window Two")];
-        let m = browser_controller_client::WindowMatcher {
-            window_id: Some(WindowId(1)),
-            ..Default::default()
-        };
-        let ids = match_windows(&windows, &m)?;
-        pretty_assertions::assert_eq!(ids, vec![WindowId(1)]);
+        let m = browser_controller_client::WindowMatcher::builder()
+            .window_id(WindowId(1))
+            .build()?;
+        let matched: Vec<WindowId> = windows.match_with(&m)?.iter().map(|w| w.id).collect();
+        pretty_assertions::assert_eq!(matched, vec![WindowId(1)]);
         Ok(())
     }
 
@@ -1927,12 +2145,11 @@ mod test {
     #[test]
     fn match_windows_by_title() -> Result<(), crate::Error> {
         let windows = vec![make_window(1, "Work"), make_window(2, "Personal")];
-        let m = browser_controller_client::WindowMatcher {
-            window_title: Some("Work".to_owned()),
-            ..Default::default()
-        };
-        let ids = match_windows(&windows, &m)?;
-        pretty_assertions::assert_eq!(ids, vec![WindowId(1)]);
+        let m = browser_controller_client::WindowMatcher::builder()
+            .window_title("Work")
+            .build()?;
+        let matched: Vec<WindowId> = windows.match_with(&m)?.iter().map(|w| w.id).collect();
+        pretty_assertions::assert_eq!(matched, vec![WindowId(1)]);
         Ok(())
     }
 
@@ -1943,12 +2160,11 @@ mod test {
             make_tab(10, 1, "Tab A", "https://example.com"),
             make_tab(11, 1, "Tab B", "https://other.com"),
         ];
-        let m = browser_controller_client::TabMatcher {
-            tab_id: Some(TabId(10)),
-            ..Default::default()
-        };
-        let ids = match_tabs(&tabs, &m)?;
-        pretty_assertions::assert_eq!(ids, vec![TabId(10)]);
+        let m = browser_controller_client::TabMatcher::builder()
+            .tab_id(TabId(10))
+            .build()?;
+        let matched: Vec<TabId> = tabs.match_with(&m)?.iter().map(|t| t.id).collect();
+        pretty_assertions::assert_eq!(matched, vec![TabId(10)]);
         Ok(())
     }
 
@@ -1959,12 +2175,11 @@ mod test {
             make_tab(10, 1, "Dashboard", "https://example.com"),
             make_tab(11, 1, "Settings", "https://example.com/settings"),
         ];
-        let m = browser_controller_client::TabMatcher {
-            tab_title: Some("Dashboard".to_owned()),
-            ..Default::default()
-        };
-        let ids = match_tabs(&tabs, &m)?;
-        pretty_assertions::assert_eq!(ids, vec![TabId(10)]);
+        let m = browser_controller_client::TabMatcher::builder()
+            .tab_title("Dashboard")
+            .build()?;
+        let matched: Vec<TabId> = tabs.match_with(&m)?.iter().map(|t| t.id).collect();
+        pretty_assertions::assert_eq!(matched, vec![TabId(10)]);
         Ok(())
     }
 }

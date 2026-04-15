@@ -14,7 +14,7 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
-use browser_controller_client::OpenTabParams;
+use browser_controller_client::OpenTabParamsBuilder;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
@@ -78,8 +78,11 @@ async fn first_window_id(h: &Harness) -> WindowId {
 
 /// Open a test tab (about:blank) and return its ID.
 async fn open_blank_tab(h: &Harness, window_id: WindowId) -> TabId {
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some("about:blank".to_owned());
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url("about:blank")
+        .build()
+        .expect("build OpenTabParams");
     let tab = h
         .client()
         .open_tab(params)
@@ -90,9 +93,12 @@ async fn open_blank_tab(h: &Harness, window_id: WindowId) -> TabId {
 
 /// Open a test tab navigated to a URL and return its ID.
 async fn open_url_tab(h: &Harness, window_id: WindowId, url: &str) -> TabId {
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some(url.to_owned());
-    params.background = true;
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url(url)
+        .background(true)
+        .build()
+        .expect("build OpenTabParams");
     let tab = h
         .client()
         .open_tab(params)
@@ -885,8 +891,11 @@ async fn match_by_tab_in_reader_mode_body(h: &Harness) {
     // Use a real article URL that Firefox is known to consider reader-compatible
     let server = test_server::Server::start_plain();
     // Open as active tab -- Firefox only analyzes active tabs for readability
-    let mut params = OpenTabParams::new(wid);
-    params.url = Some(server.article_url());
+    let params = OpenTabParamsBuilder::default()
+        .window_id(wid)
+        .url(server.article_url())
+        .build()
+        .expect("build OpenTabParams");
     let tab = h
         .client()
         .open_tab(params)

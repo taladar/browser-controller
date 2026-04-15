@@ -12,7 +12,7 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
-use browser_controller_client::OpenTabParams;
+use browser_controller_client::OpenTabParamsBuilder;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
@@ -145,9 +145,12 @@ async fn cli_tabs_sort_body(h: &Harness) {
     ];
     let mut tab_ids = Vec::new();
     for url in &urls {
-        let mut params = OpenTabParams::new(window_id);
-        params.url = Some((*url).to_owned());
-        params.background = true;
+        let params = OpenTabParamsBuilder::default()
+            .window_id(window_id)
+            .url(*url)
+            .background(true)
+            .build()
+            .expect("build OpenTabParams");
         let tab = h
             .client()
             .open_tab(params)

@@ -9,7 +9,7 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
-use browser_controller_client::OpenTabParams;
+use browser_controller_client::OpenTabParamsBuilder;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
@@ -36,8 +36,11 @@ async fn go_back_forward_body(h: &Harness) {
 
     // Open a tab on the test server's main page
     let url1 = server.base_url();
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some(url1.clone());
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url(url1.clone())
+        .build()
+        .expect("build OpenTabParams");
     let details = h
         .client()
         .open_tab(params)

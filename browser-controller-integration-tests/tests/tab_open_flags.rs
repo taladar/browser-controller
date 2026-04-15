@@ -10,7 +10,7 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
-use browser_controller_client::OpenTabParams;
+use browser_controller_client::OpenTabParamsBuilder;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
@@ -53,9 +53,12 @@ async fn first_window_id(h: &Harness) -> WindowId {
 }
 
 async fn open_blank_tab(h: &Harness, window_id: WindowId) -> TabId {
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some("about:blank".to_owned());
-    params.background = true;
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url("about:blank")
+        .background(true)
+        .build()
+        .expect("build OpenTabParams");
     let tab = h
         .client()
         .open_tab(params)

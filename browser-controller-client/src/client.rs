@@ -12,9 +12,7 @@ use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
 
 use crate::Error;
 use crate::event_stream::EventStream;
-use crate::matchers::{
-    MultipleMatchBehavior, TabMatcher, WindowMatcher, match_tabs, match_windows,
-};
+use crate::matchers::{MatchWith as _, MultipleMatchBehavior, TabMatcher, WindowMatcher};
 
 /// An async client for communicating with a browser-controller mediator.
 ///
@@ -30,43 +28,33 @@ pub struct Client {
 
 /// Parameters for opening a new tab.
 ///
-/// Use [`OpenTabParams::new`] with the target window ID, then chain builder
-/// methods for optional fields before passing to [`Client::open_tab`].
-#[derive(Debug, Clone)]
+/// Use [`OpenTabParamsBuilder`] to construct, then pass to [`Client::open_tab`].
+#[derive(Debug, Clone, derive_builder::Builder)]
+#[builder(setter(into, strip_option))]
 pub struct OpenTabParams {
     /// The window in which to open the tab.
-    pub window_id: WindowId,
+    pub(crate) window_id: WindowId,
     /// Insert the new tab immediately before the tab with this ID.
-    pub insert_before_tab_id: Option<TabId>,
+    #[builder(default)]
+    pub(crate) insert_before_tab_id: Option<TabId>,
     /// Insert the new tab immediately after the tab with this ID.
-    pub insert_after_tab_id: Option<TabId>,
+    #[builder(default)]
+    pub(crate) insert_after_tab_id: Option<TabId>,
     /// URL to load in the new tab (defaults to the browser's new-tab page).
-    pub url: Option<String>,
+    #[builder(default)]
+    pub(crate) url: Option<String>,
     /// Username for HTTP authentication.
-    pub username: Option<String>,
+    #[builder(default)]
+    pub(crate) username: Option<String>,
     /// Password for HTTP authentication.
-    pub password: Option<String>,
+    #[builder(default)]
+    pub(crate) password: Option<String>,
     /// If `true`, the tab opens in the background.
-    pub background: bool,
+    #[builder(default)]
+    pub(crate) background: bool,
     /// Firefox container (cookie store) ID.
-    pub cookie_store_id: Option<CookieStoreId>,
-}
-
-impl OpenTabParams {
-    /// Create parameters for opening a tab in the given window.
-    #[must_use]
-    pub const fn new(window_id: WindowId) -> Self {
-        Self {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: None,
-            username: None,
-            password: None,
-            background: false,
-            cookie_store_id: None,
-        }
-    }
+    #[builder(default)]
+    pub(crate) cookie_store_id: Option<CookieStoreId>,
 }
 
 impl Client {
@@ -641,47 +629,52 @@ impl Client {
     /// multiple windows match and the policy is abort.
     pub async fn resolve_windows(&self, matcher: &WindowMatcher) -> Result<Vec<WindowId>, Error> {
         let windows = self.list_windows().await?;
-        let matched = match_windows(&windows, matcher)?;
+        let matched: Vec<WindowId> = windows.match_with(matcher)?.iter().map(|w| w.id).collect();
         let criteria = matcher.to_string();
         match matched.len() {
             0 => Err(Error::NoMatchingWindow { criteria }),
             1 => Ok(matched),
-            count => match matcher.if_matches_multiple {
+            count => match matcher.if_matches_multiple() {
                 MultipleMatchBehavior::Abort => Err(Error::AmbiguousWindow { count, criteria }),
                 MultipleMatchBehavior::All => Ok(matched),
             },
         }
     }
 
-    /// Resolve a [`TabMatcher`] to a list of matching tab IDs.
+    /// Resolve a [`WindowMatcher`] + [`TabMatcher`] to a list of matching tab IDs.
     ///
-    /// If `tab_window_id` is set, only that window is searched; otherwise all windows
-    /// are enumerated first. Enforces [`MultipleMatchBehavior`].
+    /// The `window_matcher` determines which windows to search. An empty
+    /// window matcher (the default) searches all windows. The `tab_matcher`
+    /// filters tabs within those windows.
     ///
     /// # Errors
     ///
     /// Returns an error if any command fails, a regex is invalid, no tab matches, or
     /// multiple tabs match and the policy is abort.
-    pub async fn resolve_tabs(&self, matcher: &TabMatcher) -> Result<Vec<TabId>, Error> {
-        let window_ids_to_search: Vec<WindowId> = if let Some(win_id) = matcher.tab_window_id {
-            vec![win_id]
-        } else {
-            let windows = self.list_windows().await?;
-            windows.iter().map(|w| w.id).collect()
-        };
+    pub async fn resolve_tabs(
+        &self,
+        window_matcher: &WindowMatcher,
+        tab_matcher: &TabMatcher,
+    ) -> Result<Vec<TabId>, Error> {
+        let windows = self.list_windows().await?;
+        let matched_windows = windows.match_with(window_matcher)?;
 
         let mut all_tabs: Vec<TabDetails> = Vec::new();
-        for win_id in window_ids_to_search {
-            let tabs = self.list_tabs(win_id).await?;
+        for win in matched_windows {
+            let tabs = self.list_tabs(win.id).await?;
             all_tabs.extend(tabs);
         }
 
-        let matched = match_tabs(&all_tabs, matcher)?;
-        let criteria = matcher.to_string();
+        let matched: Vec<TabId> = all_tabs
+            .match_with(tab_matcher)?
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        let criteria = tab_matcher.to_string();
         match matched.len() {
             0 => Err(Error::NoMatchingTab { criteria }),
             1 => Ok(matched),
-            count => match matcher.if_matches_multiple {
+            count => match tab_matcher.if_matches_multiple() {
                 MultipleMatchBehavior::Abort => Err(Error::AmbiguousTab { count, criteria }),
                 MultipleMatchBehavior::All => Ok(matched),
             },

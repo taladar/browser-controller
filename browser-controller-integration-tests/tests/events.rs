@@ -10,7 +10,7 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
-use browser_controller_client::OpenTabParams;
+use browser_controller_client::OpenTabParamsBuilder;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::cli::EventSubscription;
@@ -62,9 +62,12 @@ async fn event_tab_opened_body(h: &Harness) {
         .await
         .expect("open");
 
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some("about:blank".to_owned());
-    params.background = true;
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url("about:blank")
+        .background(true)
+        .build()
+        .expect("build OpenTabParams");
     let tab = h.client().open_tab(params).await.expect("OpenTab");
     let tab_id = tab.id;
 
@@ -98,9 +101,12 @@ async fn event_tab_opened_chrome() {
 async fn event_tab_closed_body(h: &Harness) {
     let window_id = first_window_id(h).await;
 
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some("about:blank".to_owned());
-    params.background = true;
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url("about:blank")
+        .background(true)
+        .build()
+        .expect("build OpenTabParams");
     let tab = h.client().open_tab(params).await.expect("OpenTab");
     let tab_id = tab.id;
 
@@ -138,9 +144,12 @@ async fn event_tab_closed_chrome() {
 async fn event_tab_activated_body(h: &Harness) {
     let window_id = first_window_id(h).await;
 
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some("about:blank".to_owned());
-    params.background = true;
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url("about:blank")
+        .background(true)
+        .build()
+        .expect("build OpenTabParams");
     let tab = h.client().open_tab(params).await.expect("OpenTab");
     let tab1 = tab.id;
 
@@ -184,9 +193,12 @@ async fn event_tab_navigated_body(h: &Harness) {
     let server = test_server::Server::start_plain();
     let window_id = first_window_id(h).await;
 
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some("about:blank".to_owned());
-    params.background = true;
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url("about:blank")
+        .background(true)
+        .build()
+        .expect("build OpenTabParams");
     let tab = h.client().open_tab(params).await.expect("OpenTab");
     let tab_id = tab.id;
 
@@ -233,9 +245,12 @@ async fn event_tab_title_changed_body(h: &Harness) {
     let server = test_server::Server::start_plain();
     let window_id = first_window_id(h).await;
 
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some("about:blank".to_owned());
-    params.background = true;
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url("about:blank")
+        .background(true)
+        .build()
+        .expect("build OpenTabParams");
     let tab = h.client().open_tab(params).await.expect("OpenTab");
     let tab_id = tab.id;
 
@@ -282,9 +297,12 @@ async fn event_tab_status_changed_body(h: &Harness) {
     let server = test_server::Server::start_plain();
     let window_id = first_window_id(h).await;
 
-    let mut params = OpenTabParams::new(window_id);
-    params.url = Some("about:blank".to_owned());
-    params.background = true;
+    let params = OpenTabParamsBuilder::default()
+        .window_id(window_id)
+        .url("about:blank")
+        .background(true)
+        .build()
+        .expect("build OpenTabParams");
     let tab = h.client().open_tab(params).await.expect("OpenTab");
     let tab_id = tab.id;
 

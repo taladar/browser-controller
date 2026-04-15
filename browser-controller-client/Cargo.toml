@@ -15,6 +15,7 @@ exclude = [".env", "cliff.toml", "tarpaulin-report.html", "tarpaulin-report.json
 
 [dependencies]
 browser-controller-types = { workspace = true }
+derive_builder = { workspace = true }
 directories = { workspace = true }
 fs-err = { workspace = true }
 regex = { workspace = true }

@@ -17,6 +17,7 @@ browser-controller-types = { path = "browser-controller-types", version = "0.1.5
 clap = { version = "4.6.0", features = ["derive", "cargo"] }
 clap_complete = "4.6.0"
 clap_mangen = "0.3.0"
+derive_builder = "0.20"
 directories = "6.0"
 fs-err = "3.3"
 humantime = "2.3.0"

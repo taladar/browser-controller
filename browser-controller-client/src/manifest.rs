@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::Error;
+use crate::matchers::BrowserKind;
 
 /// The native messaging protocol family, which determines the JSON manifest format.
 #[non_exhaustive]
@@ -14,27 +15,11 @@ pub enum BrowserFamily {
     Chromium,
 }
 
-/// Browser to install the native messaging host manifest for.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BrowserTarget {
-    /// Mozilla Firefox.
-    Firefox,
-    /// LibreWolf (privacy-focused Firefox fork).
-    Librewolf,
-    /// Waterfox (performance-focused Firefox fork).
-    Waterfox,
-    /// Google Chrome.
-    Chrome,
-    /// Chromium (open-source Chrome base).
-    Chromium,
-    /// Brave Browser (privacy-focused Chromium fork).
-    Brave,
-    /// Microsoft Edge (Chromium-based).
-    Edge,
-}
-
-impl BrowserTarget {
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "manifest-specific methods live next to the manifest logic"
+)]
+impl BrowserKind {
     /// Return the native messaging protocol family used by this browser.
     #[must_use]
     pub const fn family(self) -> BrowserFamily {
@@ -178,7 +163,7 @@ pub struct InstallManifestResult {
 /// be found automatically, the manifest directory cannot be created, the manifest file
 /// cannot be written, or a Chromium-family browser is selected without `extension_id`.
 pub fn install_manifest(
-    browser: BrowserTarget,
+    browser: BrowserKind,
     mediator_path: Option<PathBuf>,
     extension_id: Option<String>,
 ) -> Result<InstallManifestResult, Error> {

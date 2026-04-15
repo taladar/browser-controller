@@ -7,13 +7,13 @@
 //!
 //! ```no_run
 //! use std::time::Duration;
-//! use browser_controller_client::{Client, discover_instances, select_instance, socket_dir};
+//! use browser_controller_client::{discover_instances, select_instance, socket_dir};
 //!
 //! # async fn example() -> Result<(), browser_controller_client::Error> {
 //! let instances = discover_instances().await?;
 //! let dir = socket_dir()?;
 //! let instance = select_instance(&instances, None, &dir)?;
-//! let client = Client::new(instance.socket_path.clone(), Duration::from_secs(30));
+//! let client = instance.client(Duration::from_secs(30));
 //! let info = client.browser_info().await?;
 //! println!("Connected to {} {}", info.browser_name, info.browser_version);
 //! # Ok(())
@@ -37,13 +37,15 @@ mod event_stream;
 mod manifest;
 mod matchers;
 mod rdp;
-mod url_util;
 
-pub use client::{Client, OpenTabParams};
+pub use client::{Client, OpenTabParams, OpenTabParamsBuilder, OpenTabParamsBuilderError};
 pub use discovery::{DiscoveredInstance, discover_instances, select_instance, socket_dir};
 pub use error::Error;
 pub use event_stream::EventStream;
-pub use manifest::{BrowserFamily, BrowserTarget, InstallManifestResult, install_manifest};
-pub use matchers::{MultipleMatchBehavior, TabMatcher, WindowMatcher, match_tabs, match_windows};
+pub use manifest::{BrowserFamily, InstallManifestResult, install_manifest};
+pub use matchers::{
+    BooleanCondition, BrowserKind, InstanceMatcher, InstanceMatcherBuilder,
+    InstanceMatcherBuilderError, MatchWith, MultipleMatchBehavior, TabMatcher, TabMatcherBuilder,
+    TabMatcherBuilderError, WindowMatcher, WindowMatcherBuilder, WindowMatcherBuilderError,
+};
 pub use rdp::load_temporary_extension;
-pub use url_util::strip_url_credentials;

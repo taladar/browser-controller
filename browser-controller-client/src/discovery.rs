@@ -20,6 +20,14 @@ pub struct DiscoveredInstance {
     pub info: BrowserInfo,
 }
 
+impl DiscoveredInstance {
+    /// Create a [`Client`](crate::Client) connected to this instance.
+    #[must_use]
+    pub fn client(&self, timeout: Duration) -> crate::Client {
+        crate::Client::new(self.socket_path.clone(), timeout)
+    }
+}
+
 /// Return the directory where mediator IPC socket/marker files are stored.
 ///
 /// - Linux: `$XDG_RUNTIME_DIR/browser-controller/`
