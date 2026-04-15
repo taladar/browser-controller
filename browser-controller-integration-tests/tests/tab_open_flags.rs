@@ -10,12 +10,13 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
+use browser_controller_client::OpenTabParams;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
 use browser_controller_integration_tests::profile;
 use browser_controller_integration_tests::test_server;
-use browser_controller_types::{CliCommand, CliResult};
+use browser_controller_types::{CliResult, TabId, WindowId};
 
 /// Run the CLI binary, asserting success.
 async fn run_cli(h: &Harness, args: &[&str]) -> String {
@@ -41,40 +42,26 @@ async fn run_cli(h: &Harness, args: &[&str]) -> String {
     stdout
 }
 
-#[expect(clippy::panic, reason = "test helper")]
-async fn first_window_id(h: &Harness) -> u32 {
-    let result = h
-        .send_command(CliCommand::ListWindows)
+async fn first_window_id(h: &Harness) -> WindowId {
+    let windows = h
+        .client()
+        .list_windows()
         .await
         .expect("ListWindows should succeed");
-    match result {
-        CliResult::Windows { windows } => {
-            assert!(!windows.is_empty(), "need at least 1 window");
-            windows.first().expect("just asserted non-empty").id
-        }
-        other => panic!("expected Windows, got {other:?}"),
-    }
+    assert!(!windows.is_empty(), "need at least 1 window");
+    windows.first().expect("just asserted non-empty").id
 }
 
-#[expect(clippy::panic, reason = "test helper")]
-async fn open_blank_tab(h: &Harness, window_id: u32) -> u32 {
-    let result = h
-        .send_command(CliCommand::OpenTab {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some("about:blank".to_owned()),
-            username: None,
-            password: None,
-            background: true,
-            cookie_store_id: None,
-        })
+async fn open_blank_tab(h: &Harness, window_id: WindowId) -> TabId {
+    let mut params = OpenTabParams::new(window_id);
+    params.url = Some("about:blank".to_owned());
+    params.background = true;
+    let tab = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab should succeed");
-    match result {
-        CliResult::Tab(d) => d.id,
-        other => panic!("expected Tab, got {other:?}"),
-    }
+    tab.id
 }
 
 // --- --before ---
@@ -87,14 +74,8 @@ async fn open_tab_before_body(h: &Harness) {
     let tab2 = open_blank_tab(h, wid).await;
 
     // Get tab2's current index
-    let tabs = h
-        .send_command(CliCommand::ListTabs { window_id: wid })
-        .await
-        .expect("ListTabs");
-    let tab2_index = match &tabs {
-        CliResult::Tabs { tabs } => tabs.iter().find(|t| t.id == tab2).expect("tab2").index,
-        other => panic!("expected Tabs, got {other:?}"),
-    };
+    let tabs = h.client().list_tabs(wid).await.expect("ListTabs");
+    let tab2_index = tabs.iter().find(|t| t.id == tab2).expect("tab2").index;
 
     // Open a new tab before tab2 via CLI
     let w = wid.to_string();
@@ -127,15 +108,9 @@ async fn open_tab_before_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     };
 
-    h.send_command(CliCommand::CloseTab { tab_id: new_tab_id })
-        .await
-        .expect("cleanup");
-    h.send_command(CliCommand::CloseTab { tab_id: tab2 })
-        .await
-        .expect("cleanup");
-    h.send_command(CliCommand::CloseTab { tab_id: tab1 })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(new_tab_id).await.expect("cleanup");
+    h.client().close_tab(tab2).await.expect("cleanup");
+    h.client().close_tab(tab1).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -163,14 +138,8 @@ async fn open_tab_after_body(h: &Harness) {
     let tab1 = open_blank_tab(h, wid).await;
 
     // Get tab1's current index
-    let tabs = h
-        .send_command(CliCommand::ListTabs { window_id: wid })
-        .await
-        .expect("ListTabs");
-    let tab1_index = match &tabs {
-        CliResult::Tabs { tabs } => tabs.iter().find(|t| t.id == tab1).expect("tab1").index,
-        other => panic!("expected Tabs, got {other:?}"),
-    };
+    let tabs = h.client().list_tabs(wid).await.expect("ListTabs");
+    let tab1_index = tabs.iter().find(|t| t.id == tab1).expect("tab1").index;
 
     // Open a new tab after tab1 via CLI
     let w = wid.to_string();
@@ -203,12 +172,8 @@ async fn open_tab_after_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     };
 
-    h.send_command(CliCommand::CloseTab { tab_id: new_tab_id })
-        .await
-        .expect("cleanup");
-    h.send_command(CliCommand::CloseTab { tab_id: tab1 })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(new_tab_id).await.expect("cleanup");
+    h.client().close_tab(tab1).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -228,19 +193,12 @@ async fn open_tab_background_body(h: &Harness) {
     let wid = first_window_id(h).await;
 
     // Get the currently active tab
-    let tabs = h
-        .send_command(CliCommand::ListTabs { window_id: wid })
-        .await
-        .expect("ListTabs");
-    let active_tab_id = match &tabs {
-        CliResult::Tabs { tabs } => {
-            tabs.iter()
-                .find(|t| t.is_active)
-                .expect("should have an active tab")
-                .id
-        }
-        other => panic!("expected Tabs, got {other:?}"),
-    };
+    let tabs = h.client().list_tabs(wid).await.expect("ListTabs");
+    let active_tab_id = tabs
+        .iter()
+        .find(|t| t.is_active)
+        .expect("should have an active tab")
+        .id;
 
     // Open a tab in the background via CLI
     let w = wid.to_string();
@@ -265,28 +223,18 @@ async fn open_tab_background_body(h: &Harness) {
     };
 
     // Verify the original tab is still active
-    let tabs = h
-        .send_command(CliCommand::ListTabs { window_id: wid })
-        .await
-        .expect("ListTabs");
-    match &tabs {
-        CliResult::Tabs { tabs } => {
-            let active = tabs
-                .iter()
-                .find(|t| t.is_active)
-                .expect("should have active tab");
-            pretty_assertions::assert_eq!(
-                active.id,
-                active_tab_id,
-                "original tab should still be active after --background open",
-            );
-        }
-        other => panic!("expected Tabs, got {other:?}"),
-    }
+    let tabs = h.client().list_tabs(wid).await.expect("ListTabs");
+    let active = tabs
+        .iter()
+        .find(|t| t.is_active)
+        .expect("should have active tab");
+    pretty_assertions::assert_eq!(
+        active.id,
+        active_tab_id,
+        "original tab should still be active after --background open",
+    );
 
-    h.send_command(CliCommand::CloseTab { tab_id: new_tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(new_tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]

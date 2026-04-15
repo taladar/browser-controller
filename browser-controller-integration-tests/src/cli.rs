@@ -3,9 +3,13 @@
 //! Thin wrappers around [`browser_controller_client`] for use in test harnesses.
 
 use std::path::Path;
+use std::time::Duration;
 
 use browser_controller_client::Client;
-use browser_controller_types::{BrowserEvent, CliCommand, CliResult};
+use browser_controller_types::BrowserEvent;
+
+/// Default command timeout for integration tests.
+const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Error type for CLI command operations.
 #[derive(Debug, thiserror::Error)]
@@ -15,15 +19,10 @@ pub enum Error {
     Client(#[from] browser_controller_client::Error),
 }
 
-/// Send a command to the mediator and wait for the response.
-///
-/// # Errors
-///
-/// Returns an error on IO failure, JSON failure, request ID mismatch, or if the
-/// command itself returns an error from the extension.
-pub async fn send_command(socket_path: &Path, command: CliCommand) -> Result<CliResult, Error> {
-    let client = Client::new(socket_path.to_owned());
-    Ok(client.send_command(command).await?)
+/// Create a [`Client`] for the given socket path with the default test timeout.
+#[must_use]
+pub fn client(socket_path: &Path) -> Client {
+    Client::new(socket_path.to_owned(), TEST_TIMEOUT)
 }
 
 /// An active event subscription connection.
@@ -48,7 +47,7 @@ impl EventSubscription {
     ///
     /// Returns an error if the socket connection or command send fails.
     pub async fn open(socket_path: &Path) -> Result<Self, Error> {
-        let client = Client::new(socket_path.to_owned());
+        let client = Client::new(socket_path.to_owned(), TEST_TIMEOUT);
         let inner = client.subscribe_events().await?;
         Ok(Self { inner })
     }

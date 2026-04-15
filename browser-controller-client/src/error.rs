@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use browser_controller_types::CliResult;
+
 /// Errors that can occur in the browser-controller client library.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
@@ -61,6 +63,15 @@ pub enum Error {
         count: usize,
         /// Description of the criteria that were used.
         criteria: String,
+    },
+
+    /// The mediator returned a response variant that does not match the command.
+    #[error("unexpected response: expected {expected}, got {actual:?}")]
+    UnexpectedResponse {
+        /// The name of the expected `CliResult` variant.
+        expected: &'static str,
+        /// The actual `CliResult` that was received.
+        actual: Box<CliResult>,
     },
 
     /// A regular expression pattern could not be compiled.

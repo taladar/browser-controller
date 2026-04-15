@@ -16,7 +16,7 @@ use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
 use browser_controller_integration_tests::profile;
 use browser_controller_integration_tests::test_server;
-use browser_controller_types::{CliCommand, CliResult};
+use browser_controller_types::WindowId;
 
 /// Run the CLI binary with the given arguments and return (stdout, success).
 async fn run_cli_raw(h: &Harness, args: &[&str]) -> (String, bool) {
@@ -44,45 +44,34 @@ async fn run_cli(h: &Harness, args: &[&str]) -> String {
 }
 
 /// Count windows via the protocol.
-#[expect(clippy::panic, reason = "test helper")]
 async fn window_count(h: &Harness) -> usize {
-    let result = h
-        .send_command(CliCommand::ListWindows)
+    let windows = h
+        .client()
+        .list_windows()
         .await
         .expect("ListWindows should succeed");
-    match result {
-        CliResult::Windows { windows } => windows.len(),
-        other => panic!("expected Windows, got {other:?}"),
-    }
+    windows.len()
 }
 
 /// Get the first window ID.
-#[expect(clippy::panic, reason = "test helper")]
-async fn first_window_id(h: &Harness) -> u32 {
-    let result = h
-        .send_command(CliCommand::ListWindows)
+async fn first_window_id(h: &Harness) -> WindowId {
+    let windows = h
+        .client()
+        .list_windows()
         .await
         .expect("ListWindows should succeed");
-    match result {
-        CliResult::Windows { windows } => {
-            assert!(!windows.is_empty(), "need at least 1 window");
-            windows.first().expect("just asserted non-empty").id
-        }
-        other => panic!("expected Windows, got {other:?}"),
-    }
+    assert!(!windows.is_empty(), "need at least 1 window");
+    windows.first().expect("just asserted non-empty").id
 }
 
 /// Count tabs in a window via the protocol.
-#[expect(clippy::panic, reason = "test helper")]
-async fn tab_count(h: &Harness, window_id: u32) -> usize {
-    let result = h
-        .send_command(CliCommand::ListTabs { window_id })
+async fn tab_count(h: &Harness, window_id: WindowId) -> usize {
+    let tabs = h
+        .client()
+        .list_tabs(window_id)
         .await
         .expect("ListTabs should succeed");
-    match result {
-        CliResult::Tabs { tabs } => tabs.len(),
-        other => panic!("expected Tabs, got {other:?}"),
-    }
+    tabs.len()
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +110,7 @@ async fn if_title_prefix_does_not_exist_body(h: &Harness, prefix: &str) {
         "first call should open a new window",
     );
 
-    // Second call: same prefix → should NOT open another window
+    // Second call: same prefix -> should NOT open another window
     run_cli(
         h,
         &[
@@ -143,17 +132,17 @@ async fn if_title_prefix_does_not_exist_body(h: &Harness, prefix: &str) {
 
     // Clean up: close the window we opened
     // Find it by title prefix
-    let result = h
-        .send_command(CliCommand::ListWindows)
+    let windows = h
+        .client()
+        .list_windows()
         .await
         .expect("ListWindows should succeed");
-    if let CliResult::Windows { windows } = result {
-        for w in &windows {
-            if w.title_prefix.as_deref() == Some(prefix) {
-                h.send_command(CliCommand::CloseWindow { window_id: w.id })
-                    .await
-                    .expect("CloseWindow should succeed");
-            }
+    for w in &windows {
+        if w.title_prefix.as_deref() == Some(prefix) {
+            h.client()
+                .close_window(w.id)
+                .await
+                .expect("CloseWindow should succeed");
         }
     }
 }
@@ -174,7 +163,7 @@ async fn if_title_prefix_does_not_exist_trailing_space_firefox() {
     .await;
 }
 
-// Not tested on Chrome — title prefix is Firefox-only.
+// Not tested on Chrome -- title prefix is Firefox-only.
 
 // ---------------------------------------------------------------------------
 // --if-url-does-not-exist
@@ -219,7 +208,7 @@ async fn if_url_does_not_exist_body(h: &Harness) {
         "first call should open a new tab",
     );
 
-    // Second call: same URL → should NOT open another tab
+    // Second call: same URL -> should NOT open another tab
     run_cli(
         h,
         &[
@@ -242,17 +231,17 @@ async fn if_url_does_not_exist_body(h: &Harness) {
     );
 
     // Clean up: close the tab we opened
-    let result = h
-        .send_command(CliCommand::ListTabs { window_id })
+    let tabs = h
+        .client()
+        .list_tabs(window_id)
         .await
         .expect("ListTabs should succeed");
-    if let CliResult::Tabs { tabs } = result {
-        for t in &tabs {
-            if t.url == url {
-                h.send_command(CliCommand::CloseTab { tab_id: t.id })
-                    .await
-                    .expect("CloseTab should succeed");
-            }
+    for t in &tabs {
+        if t.url == url {
+            h.client()
+                .close_tab(t.id)
+                .await
+                .expect("CloseTab should succeed");
         }
     }
 }

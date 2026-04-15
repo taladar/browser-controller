@@ -12,39 +12,32 @@
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
-use browser_controller_types::{CliCommand, CliResult};
 
 /// Shared smoke test body: sends `GetBrowserInfo` and verifies the response.
-#[expect(
-    clippy::panic,
-    reason = "test assertions use panic on unexpected variants"
-)]
 async fn smoke_body(h: &Harness) {
-    let result = h.send_command(CliCommand::GetBrowserInfo).await;
-    let result = result.expect("GetBrowserInfo should succeed");
+    let info = h
+        .client()
+        .browser_info()
+        .await
+        .expect("GetBrowserInfo should succeed");
 
-    match result {
-        CliResult::BrowserInfo(info) => {
-            match h.browser {
-                browser::Kind::Firefox => assert!(
-                    info.browser_name.contains("Firefox"),
-                    "expected browser_name containing Firefox, got {}",
-                    info.browser_name,
-                ),
-                browser::Kind::Chrome => assert!(
-                    !info.browser_name.contains("Firefox"),
-                    "expected non-Firefox browser_name for Chrome, got {}",
-                    info.browser_name,
-                ),
-            }
-            assert!(info.pid > 0, "browser PID should be non-zero");
-            assert!(
-                !info.browser_version.is_empty(),
-                "browser version should not be empty",
-            );
-        }
-        other => panic!("expected BrowserInfo, got {other:?}"),
+    match h.browser {
+        browser::Kind::Firefox => assert!(
+            info.browser_name.contains("Firefox"),
+            "expected browser_name containing Firefox, got {}",
+            info.browser_name,
+        ),
+        browser::Kind::Chrome => assert!(
+            !info.browser_name.contains("Firefox"),
+            "expected non-Firefox browser_name for Chrome, got {}",
+            info.browser_name,
+        ),
     }
+    assert!(info.pid > 0, "browser PID should be non-zero");
+    assert!(
+        !info.browser_version.is_empty(),
+        "browser version should not be empty",
+    );
 
     // If niri is available, verify the browser window exists
     if browser_controller_integration_tests::niri::is_available()

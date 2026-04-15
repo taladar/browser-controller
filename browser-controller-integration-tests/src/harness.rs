@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use browser_controller_types::{CliCommand, CliResult};
+use browser_controller_client::Client;
 use futures::FutureExt as _;
 use webdriverbidi::session::WebDriverBiDiSession;
 
@@ -131,13 +131,10 @@ impl Harness {
         })
     }
 
-    /// Send a CLI command to the mediator and return the result.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`cli::Error`] on communication or command failure.
-    pub async fn send_command(&self, command: CliCommand) -> Result<CliResult, cli::Error> {
-        cli::send_command(&self.mediator_socket, command).await
+    /// Create a [`Client`] connected to this harness's mediator.
+    #[must_use]
+    pub fn client(&self) -> Client {
+        cli::client(&self.mediator_socket)
     }
 
     /// Shut down the test stack cleanly.
@@ -155,11 +152,12 @@ impl Harness {
     ///
     /// Returns `None` if the command fails (e.g. mediator not ready yet).
     async fn probe_browser_pid(socket: &std::path::Path) -> Option<u32> {
+        let client = cli::client(socket);
         // Retry a few times since the mediator may still be initializing
         for _ in 0..5u8 {
-            match cli::send_command(socket, CliCommand::GetBrowserInfo).await {
-                Ok(CliResult::BrowserInfo(info)) => return Some(info.pid),
-                _ => tokio::time::sleep(Duration::from_millis(500)).await,
+            match client.browser_info().await {
+                Ok(info) => return Some(info.pid),
+                Err(_) => tokio::time::sleep(Duration::from_millis(500)).await,
             }
         }
         None

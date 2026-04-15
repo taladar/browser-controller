@@ -15,7 +15,7 @@ use browser_controller_integration_tests::cli::EventSubscription;
 use browser_controller_integration_tests::harness;
 use browser_controller_integration_tests::profile;
 use browser_controller_integration_tests::test_server;
-use browser_controller_types::{BrowserEvent, CliCommand, CliResult};
+use browser_controller_types::{BrowserEvent, CliResult};
 
 /// Run the CLI binary, asserting success.
 async fn run_cli(h: &Harness, args: &[&str]) -> String {
@@ -43,54 +43,39 @@ async fn run_cli(h: &Harness, args: &[&str]) -> String {
 
 // --- Protocol-level: start and list ---
 
-#[expect(clippy::panic, reason = "test assertions")]
 async fn start_and_list_downloads_body(h: &Harness) {
     let server = test_server::Server::start_plain();
     let url = server.download_url("test-file.bin");
 
     // Start a download
-    let result = h
-        .send_command(CliCommand::StartDownload {
-            url: url.clone(),
-            filename: None,
-            save_as: false,
-            conflict_action: None,
-        })
+    let download_id = h
+        .client()
+        .start_download(url.clone(), None, false, None)
         .await
         .expect("StartDownload should succeed");
-    let download_id = match result {
-        CliResult::DownloadId { download_id } => download_id,
-        other => panic!("expected DownloadId, got {other:?}"),
-    };
 
     // Wait for download to complete
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // List downloads and verify ours is there
-    let result = h
-        .send_command(CliCommand::ListDownloads {
-            state: None,
-            limit: None,
-            query: None,
-        })
+    let downloads = h
+        .client()
+        .list_downloads(None, None, None)
         .await
         .expect("ListDownloads should succeed");
-    match result {
-        CliResult::Downloads { downloads } => {
-            let dl = downloads.iter().find(|d| d.id == download_id);
-            assert!(dl.is_some(), "our download should appear in the list");
-            let dl = dl.expect("just asserted");
-            assert!(
-                dl.url.contains("test-file.bin"),
-                "download URL should contain test-file.bin, got {}",
-                dl.url,
-            );
-        }
-        other => panic!("expected Downloads, got {other:?}"),
-    }
+
+    let dl = downloads.iter().find(|d| d.id == download_id);
+    assert!(dl.is_some(), "our download should appear in the list");
+    let dl = dl.expect("just asserted");
+    assert!(
+        dl.url.contains("test-file.bin"),
+        "download URL should contain test-file.bin, got {}",
+        dl.url,
+    );
 
     // Cleanup
-    h.send_command(CliCommand::EraseDownload { download_id })
+    h.client()
+        .erase_download(download_id)
         .await
         .expect("EraseDownload should succeed");
 }
@@ -113,49 +98,33 @@ async fn start_and_list_downloads_chrome() {
 
 // --- Protocol-level: erase ---
 
-#[expect(clippy::panic, reason = "test assertions")]
 async fn erase_download_body(h: &Harness) {
     let server = test_server::Server::start_plain();
 
-    let result = h
-        .send_command(CliCommand::StartDownload {
-            url: server.download_url("erase-test.bin"),
-            filename: None,
-            save_as: false,
-            conflict_action: None,
-        })
+    let download_id = h
+        .client()
+        .start_download(server.download_url("erase-test.bin"), None, false, None)
         .await
         .expect("StartDownload should succeed");
-    let download_id = match result {
-        CliResult::DownloadId { download_id } => download_id,
-        other => panic!("expected DownloadId, got {other:?}"),
-    };
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // Erase it
-    h.send_command(CliCommand::EraseDownload { download_id })
+    h.client()
+        .erase_download(download_id)
         .await
         .expect("EraseDownload should succeed");
 
     // Verify it's gone
-    let result = h
-        .send_command(CliCommand::ListDownloads {
-            state: None,
-            limit: None,
-            query: None,
-        })
+    let downloads = h
+        .client()
+        .list_downloads(None, None, None)
         .await
         .expect("ListDownloads should succeed");
-    match result {
-        CliResult::Downloads { downloads } => {
-            assert!(
-                downloads.iter().all(|d| d.id != download_id),
-                "erased download should not appear in list",
-            );
-        }
-        other => panic!("expected Downloads, got {other:?}"),
-    }
+    assert!(
+        downloads.iter().all(|d| d.id != download_id),
+        "erased download should not appear in list",
+    );
 }
 
 #[tokio::test]
@@ -170,54 +139,38 @@ async fn erase_download_chrome() {
 
 // --- Protocol-level: erase all ---
 
-#[expect(clippy::panic, reason = "test assertions")]
 async fn erase_all_downloads_body(h: &Harness) {
     let server = test_server::Server::start_plain();
 
     // Start two downloads
-    h.send_command(CliCommand::StartDownload {
-        url: server.download_url("clear1.bin"),
-        filename: None,
-        save_as: false,
-        conflict_action: None,
-    })
-    .await
-    .expect("StartDownload 1 should succeed");
+    h.client()
+        .start_download(server.download_url("clear1.bin"), None, false, None)
+        .await
+        .expect("StartDownload 1 should succeed");
 
-    h.send_command(CliCommand::StartDownload {
-        url: server.download_url("clear2.bin"),
-        filename: None,
-        save_as: false,
-        conflict_action: None,
-    })
-    .await
-    .expect("StartDownload 2 should succeed");
+    h.client()
+        .start_download(server.download_url("clear2.bin"), None, false, None)
+        .await
+        .expect("StartDownload 2 should succeed");
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // Erase all
-    h.send_command(CliCommand::EraseAllDownloads { state: None })
+    h.client()
+        .erase_all_downloads(None)
         .await
         .expect("EraseAllDownloads should succeed");
 
     // Verify empty
-    let result = h
-        .send_command(CliCommand::ListDownloads {
-            state: None,
-            limit: None,
-            query: None,
-        })
+    let downloads = h
+        .client()
+        .list_downloads(None, None, None)
         .await
         .expect("ListDownloads should succeed");
-    match result {
-        CliResult::Downloads { downloads } => {
-            assert!(
-                downloads.is_empty(),
-                "download list should be empty after clear"
-            );
-        }
-        other => panic!("expected Downloads, got {other:?}"),
-    }
+    assert!(
+        downloads.is_empty(),
+        "download list should be empty after clear"
+    );
 }
 
 #[tokio::test]
@@ -238,7 +191,6 @@ async fn erase_all_downloads_chrome() {
 
 // --- Protocol-level: download events ---
 
-#[expect(clippy::panic, reason = "test assertions")]
 async fn download_events_body(h: &Harness) {
     let server = test_server::Server::start_plain();
 
@@ -248,19 +200,11 @@ async fn download_events_body(h: &Harness) {
         .expect("EventSubscription should open");
 
     // Start a download
-    let result = h
-        .send_command(CliCommand::StartDownload {
-            url: server.download_url("event-test.bin"),
-            filename: None,
-            save_as: false,
-            conflict_action: None,
-        })
+    let download_id = h
+        .client()
+        .start_download(server.download_url("event-test.bin"), None, false, None)
         .await
         .expect("StartDownload should succeed");
-    let download_id = match result {
-        CliResult::DownloadId { download_id } => download_id,
-        other => panic!("expected DownloadId, got {other:?}"),
-    };
 
     // Read events with a timeout — expect DownloadCreated
     let mut found_created = false;
@@ -281,6 +225,7 @@ async fn download_events_body(h: &Harness) {
                 break;
             }
             Ok(Ok(_)) => continue,
+            #[expect(clippy::panic, reason = "test assertion")]
             Ok(Err(e)) => panic!("error reading event: {e}"),
             Err(_timeout) => break,
         }
@@ -293,7 +238,8 @@ async fn download_events_body(h: &Harness) {
 
     // Cleanup
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    h.send_command(CliCommand::EraseDownload { download_id })
+    h.client()
+        .erase_download(download_id)
         .await
         .expect("EraseDownload should succeed");
 }
@@ -390,19 +336,14 @@ async fn cli_downloads_start_and_list_chrome() {
 
 // --- CLI: downloads clear ---
 
-#[expect(clippy::panic, reason = "test assertions")]
 async fn cli_downloads_clear_body(h: &Harness) {
     let server = test_server::Server::start_plain();
 
     // Start a download via protocol
-    h.send_command(CliCommand::StartDownload {
-        url: server.download_url("clear-cli.bin"),
-        filename: None,
-        save_as: false,
-        conflict_action: None,
-    })
-    .await
-    .expect("StartDownload should succeed");
+    h.client()
+        .start_download(server.download_url("clear-cli.bin"), None, false, None)
+        .await
+        .expect("StartDownload should succeed");
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
@@ -410,20 +351,12 @@ async fn cli_downloads_clear_body(h: &Harness) {
     run_cli(h, &["downloads", "clear"]).await;
 
     // Verify empty
-    let result = h
-        .send_command(CliCommand::ListDownloads {
-            state: None,
-            limit: None,
-            query: None,
-        })
+    let downloads = h
+        .client()
+        .list_downloads(None, None, None)
         .await
         .expect("ListDownloads should succeed");
-    match result {
-        CliResult::Downloads { downloads } => {
-            assert!(downloads.is_empty(), "should be empty after clear");
-        }
-        other => panic!("expected Downloads, got {other:?}"),
-    }
+    assert!(downloads.is_empty(), "should be empty after clear");
 }
 
 #[tokio::test]

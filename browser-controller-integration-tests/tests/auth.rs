@@ -12,27 +12,23 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
+use browser_controller_client::OpenTabParams;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
 use browser_controller_integration_tests::profile;
 use browser_controller_integration_tests::test_server;
-use browser_controller_types::{CliCommand, CliResult};
+use browser_controller_types::WindowId;
 
 /// Helper to get the first window ID.
-#[expect(clippy::panic, reason = "test helper panics on unexpected variants")]
-async fn first_window_id(h: &Harness) -> u32 {
-    let result = h
-        .send_command(CliCommand::ListWindows)
+async fn first_window_id(h: &Harness) -> WindowId {
+    let windows = h
+        .client()
+        .list_windows()
         .await
         .expect("ListWindows should succeed");
-    match result {
-        CliResult::Windows { windows } => {
-            assert!(!windows.is_empty(), "need at least 1 window");
-            windows.first().expect("just asserted non-empty").id
-        }
-        other => panic!("expected Windows, got {other:?}"),
-    }
+    assert!(!windows.is_empty(), "need at least 1 window");
+    windows.first().expect("just asserted non-empty").id
 }
 
 /// Run the CLI binary with the given arguments and return stdout.
@@ -69,10 +65,6 @@ async fn run_cli(h: &Harness, args: &[&str]) -> String {
 /// 1. The page was successfully authenticated (tab title confirms it)
 /// 2. The tab URL does not contain credentials
 /// 3. The CLI `tabs list` output does not contain credentials
-#[expect(
-    clippy::panic,
-    reason = "test assertions use panic on unexpected variants"
-)]
 async fn auth_credentials_body(h: &Harness) {
     let server = test_server::Server::start_with_auth("testuser", "testpass");
     let window_id = first_window_id(h).await;
@@ -82,63 +74,52 @@ async fn auth_credentials_body(h: &Harness) {
 
     // Open tab with username/password — the extension provides credentials
     // via onAuthRequired asynchronously; OpenTab returns immediately.
-    let open_result = h
-        .send_command(CliCommand::OpenTab {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some(auth_url.clone()),
-            username: Some("testuser".to_owned()),
-            password: Some("testpass".to_owned()),
-            background: true,
-            cookie_store_id: None,
-        })
+    let mut params = OpenTabParams::new(window_id);
+    params.url = Some(auth_url.clone());
+    params.username = Some("testuser".to_owned());
+    params.password = Some("testpass".to_owned());
+    params.background = true;
+    let tab = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab with credentials should succeed");
-
-    let tab_id = match open_result {
-        CliResult::Tab(details) => details.id,
-        other => panic!("expected Tab, got {other:?}"),
-    };
+    let tab_id = tab.id;
 
     // Wait for the auth exchange and page load to complete
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
     // 1. Verify the page loaded successfully via ListTabs
-    let list_result = h
-        .send_command(CliCommand::ListTabs { window_id })
+    let tabs = h
+        .client()
+        .list_tabs(window_id)
         .await
         .expect("ListTabs should succeed");
 
-    match &list_result {
-        CliResult::Tabs { tabs } => {
-            let tab = tabs
-                .iter()
-                .find(|t| t.id == tab_id)
-                .expect("opened tab should exist in ListTabs");
+    let tab = tabs
+        .iter()
+        .find(|t| t.id == tab_id)
+        .expect("opened tab should exist in ListTabs");
 
-            // URL should not contain credentials
-            assert!(
-                !tab.url.contains("testuser"),
-                "ListTabs URL should not contain username, got {}",
-                tab.url,
-            );
-            assert!(
-                !tab.url.contains("testpass"),
-                "ListTabs URL should not contain password, got {}",
-                tab.url,
-            );
+    // URL should not contain credentials
+    assert!(
+        !tab.url.contains("testuser"),
+        "ListTabs URL should not contain username, got {}",
+        tab.url,
+    );
+    assert!(
+        !tab.url.contains("testpass"),
+        "ListTabs URL should not contain password, got {}",
+        tab.url,
+    );
 
-            // The title should be "Auth Page" (from our test server's response),
-            // confirming successful authentication
-            assert!(
-                tab.title.contains("Auth Page"),
-                "tab title should contain 'Auth Page' (indicating successful auth), got {:?}",
-                tab.title,
-            );
-        }
-        other => panic!("expected Tabs, got {other:?}"),
-    }
+    // The title should be "Auth Page" (from our test server's response),
+    // confirming successful authentication
+    assert!(
+        tab.title.contains("Auth Page"),
+        "tab title should contain 'Auth Page' (indicating successful auth), got {:?}",
+        tab.title,
+    );
 
     // 2. Verify via CLI binary `tabs list` output
     let wid = window_id.to_string();
@@ -153,7 +134,8 @@ async fn auth_credentials_body(h: &Harness) {
     );
 
     // Cleanup
-    h.send_command(CliCommand::CloseTab { tab_id })
+    h.client()
+        .close_tab(tab_id)
         .await
         .expect("CloseTab should succeed");
 }

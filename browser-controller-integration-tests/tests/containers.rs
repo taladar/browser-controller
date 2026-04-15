@@ -11,12 +11,13 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
+use browser_controller_client::OpenTabParams;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
 use browser_controller_integration_tests::profile;
 use browser_controller_integration_tests::test_server;
-use browser_controller_types::{CliCommand, CliResult};
+use browser_controller_types::{CliResult, WindowId};
 
 /// Run the CLI binary, asserting success.
 async fn run_cli(h: &Harness, args: &[&str]) -> String {
@@ -42,47 +43,38 @@ async fn run_cli(h: &Harness, args: &[&str]) -> String {
     stdout
 }
 
-#[expect(clippy::panic, reason = "test helper")]
-async fn first_window_id(h: &Harness) -> u32 {
-    let result = h
-        .send_command(CliCommand::ListWindows)
+async fn first_window_id(h: &Harness) -> WindowId {
+    let windows = h
+        .client()
+        .list_windows()
         .await
         .expect("ListWindows should succeed");
-    match result {
-        CliResult::Windows { windows } => {
-            assert!(!windows.is_empty(), "need at least 1 window");
-            windows.first().expect("just asserted non-empty").id
-        }
-        other => panic!("expected Windows, got {other:?}"),
-    }
+    assert!(!windows.is_empty(), "need at least 1 window");
+    windows.first().expect("just asserted non-empty").id
 }
 
 // --- ListContainers ---
 
-#[expect(clippy::panic, reason = "test assertions")]
 async fn list_containers_body(h: &Harness) {
-    let result = h
-        .send_command(CliCommand::ListContainers)
+    let containers = h
+        .client()
+        .list_containers()
         .await
         .expect("ListContainers should succeed");
-    match result {
-        CliResult::Containers { containers } => {
-            // Firefox has default containers (Personal, Work, Banking, Shopping)
-            assert!(
-                !containers.is_empty(),
-                "Firefox should have at least one container",
-            );
-            // Verify container fields are populated
-            let first = containers.first().expect("just asserted non-empty");
-            assert!(
-                !first.cookie_store_id.is_empty(),
-                "cookie_store_id should not be empty",
-            );
-            assert!(!first.name.is_empty(), "name should not be empty");
-            assert!(!first.color.is_empty(), "color should not be empty");
-        }
-        other => panic!("expected Containers, got {other:?}"),
-    }
+
+    // Firefox has default containers (Personal, Work, Banking, Shopping)
+    assert!(
+        !containers.is_empty(),
+        "Firefox should have at least one container",
+    );
+    // Verify container fields are populated
+    let first = containers.first().expect("just asserted non-empty");
+    assert!(
+        !first.cookie_store_id.0.is_empty(),
+        "cookie_store_id should not be empty",
+    );
+    assert!(!first.name.is_empty(), "name should not be empty");
+    assert!(!first.color.is_empty(), "color should not be empty");
 }
 
 #[tokio::test]
@@ -95,78 +87,58 @@ async fn list_containers_firefox() {
 
 // --- Open tab in container ---
 
-#[expect(clippy::panic, reason = "test assertions")]
 async fn open_tab_in_container_body(h: &Harness) {
     let server = test_server::Server::start_plain();
     let window_id = first_window_id(h).await;
 
     // Get the first container's cookie store ID
-    let containers_result = h
-        .send_command(CliCommand::ListContainers)
+    let containers = h
+        .client()
+        .list_containers()
         .await
         .expect("ListContainers should succeed");
-    let container_id = match &containers_result {
-        CliResult::Containers { containers } => {
-            assert!(!containers.is_empty(), "need at least one container");
-            containers
-                .first()
-                .expect("just asserted")
-                .cookie_store_id
-                .clone()
-        }
-        other => panic!("expected Containers, got {other:?}"),
-    };
+    assert!(!containers.is_empty(), "need at least one container");
+    let container_id = containers
+        .first()
+        .expect("just asserted")
+        .cookie_store_id
+        .clone();
 
     // Open a tab in that container
-    let open_result = h
-        .send_command(CliCommand::OpenTab {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some(server.base_url()),
-            username: None,
-            password: None,
-            background: true,
-            cookie_store_id: Some(container_id.clone()),
-        })
+    let mut params = OpenTabParams::new(window_id);
+    params.url = Some(server.base_url());
+    params.background = true;
+    params.cookie_store_id = Some(container_id.clone());
+    let tab = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab in container should succeed");
 
-    let tab_id = match open_result {
-        CliResult::Tab(details) => {
-            pretty_assertions::assert_eq!(
-                details.cookie_store_id.as_deref(),
-                Some(container_id.as_str()),
-                "tab should be in the requested container",
-            );
-            details.id
-        }
-        other => panic!("expected Tab, got {other:?}"),
-    };
+    pretty_assertions::assert_eq!(
+        tab.cookie_store_id,
+        Some(container_id.clone()),
+        "tab should be in the requested container",
+    );
+    let tab_id = tab.id;
 
     // Verify via ListTabs
-    let tabs_result = h
-        .send_command(CliCommand::ListTabs { window_id })
+    let tabs = h
+        .client()
+        .list_tabs(window_id)
         .await
         .expect("ListTabs should succeed");
-    match &tabs_result {
-        CliResult::Tabs { tabs } => {
-            let tab = tabs
-                .iter()
-                .find(|t| t.id == tab_id)
-                .expect("tab should exist");
-            pretty_assertions::assert_eq!(
-                tab.cookie_store_id.as_deref(),
-                Some(container_id.as_str()),
-                "ListTabs should show the container",
-            );
-        }
-        other => panic!("expected Tabs, got {other:?}"),
-    }
+    let tab = tabs
+        .iter()
+        .find(|t| t.id == tab_id)
+        .expect("tab should exist");
+    pretty_assertions::assert_eq!(
+        tab.cookie_store_id,
+        Some(container_id.clone()),
+        "ListTabs should show the container",
+    );
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -179,79 +151,66 @@ async fn open_tab_in_container_firefox() {
 
 // --- Reopen tab in container ---
 
-#[expect(clippy::panic, reason = "test assertions")]
 async fn reopen_tab_in_container_body(h: &Harness) {
     let server = test_server::Server::start_plain();
     let window_id = first_window_id(h).await;
 
     // Get two different containers
-    let containers_result = h
-        .send_command(CliCommand::ListContainers)
+    let containers = h
+        .client()
+        .list_containers()
         .await
         .expect("ListContainers should succeed");
-    let (container1, container2) = match &containers_result {
-        CliResult::Containers { containers } => {
-            assert!(
-                containers.len() >= 2,
-                "need at least 2 containers for this test",
-            );
-            let c1 = containers.first().expect("just asserted len >= 2");
-            let c2 = containers.get(1).expect("just asserted len >= 2");
-            (c1.cookie_store_id.clone(), c2.cookie_store_id.clone())
-        }
-        other => panic!("expected Containers, got {other:?}"),
-    };
+    assert!(
+        containers.len() >= 2,
+        "need at least 2 containers for this test",
+    );
+    let container1 = containers
+        .first()
+        .expect("just asserted len >= 2")
+        .cookie_store_id
+        .clone();
+    let container2 = containers
+        .get(1)
+        .expect("just asserted len >= 2")
+        .cookie_store_id
+        .clone();
 
     // Open a tab in container1
     let url = server.base_url();
-    let open_result = h
-        .send_command(CliCommand::OpenTab {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some(url.clone()),
-            username: None,
-            password: None,
-            background: true,
-            cookie_store_id: Some(container1),
-        })
+    let mut params = OpenTabParams::new(window_id);
+    params.url = Some(url.clone());
+    params.background = true;
+    params.cookie_store_id = Some(container1);
+    let tab = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab should succeed");
-    let tab_id = match open_result {
-        CliResult::Tab(d) => d.id,
-        other => panic!("expected Tab, got {other:?}"),
-    };
+    let tab_id = tab.id;
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // Reopen in container2
-    let reopen_result = h
-        .send_command(CliCommand::ReopenTabInContainer {
-            tab_id,
-            cookie_store_id: container2.clone(),
-        })
+    let new_tab = h
+        .client()
+        .reopen_tab_in_container(tab_id, container2.clone())
         .await
         .expect("ReopenTabInContainer should succeed");
-    let new_tab_id = match reopen_result {
-        CliResult::Tab(d) => {
-            pretty_assertions::assert_eq!(
-                d.cookie_store_id.as_deref(),
-                Some(container2.as_str()),
-                "reopened tab should be in container2",
-            );
-            assert!(
-                d.url.starts_with(&url) || d.url == "about:blank",
-                "reopened tab should have the same URL, got {}",
-                d.url,
-            );
-            d.id
-        }
-        other => panic!("expected Tab, got {other:?}"),
-    };
 
-    h.send_command(CliCommand::CloseTab { tab_id: new_tab_id })
-        .await
-        .expect("cleanup");
+    pretty_assertions::assert_eq!(
+        new_tab.cookie_store_id,
+        Some(container2.clone()),
+        "reopened tab should be in container2",
+    );
+    assert!(
+        new_tab.url.starts_with(&url) || new_tab.url == "about:blank",
+        "reopened tab should have the same URL, got {}",
+        new_tab.url,
+    );
+    let new_tab_id = new_tab.id;
+
+    h.client().close_tab(new_tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -264,59 +223,44 @@ async fn reopen_tab_in_container_firefox() {
 
 // --- cookie_store_id in tab listing (both browsers) ---
 
-#[expect(clippy::panic, reason = "test assertions")]
 async fn tab_cookie_store_id_in_listing_body(h: &Harness) {
     let window_id = first_window_id(h).await;
 
     // Open a tab
-    let open_result = h
-        .send_command(CliCommand::OpenTab {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some("about:blank".to_owned()),
-            username: None,
-            password: None,
-            background: true,
-            cookie_store_id: None,
-        })
+    let mut params = OpenTabParams::new(window_id);
+    params.url = Some("about:blank".to_owned());
+    params.background = true;
+    let tab = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab should succeed");
-    let tab_id = match open_result {
-        CliResult::Tab(d) => d.id,
-        other => panic!("expected Tab, got {other:?}"),
-    };
+    let tab_id = tab.id;
 
     // List tabs and check cookie_store_id field exists (may be null on Chrome)
-    let tabs_result = h
-        .send_command(CliCommand::ListTabs { window_id })
+    let tabs = h
+        .client()
+        .list_tabs(window_id)
         .await
         .expect("ListTabs should succeed");
-    match &tabs_result {
-        CliResult::Tabs { tabs } => {
-            let tab = tabs
-                .iter()
-                .find(|t| t.id == tab_id)
-                .expect("tab should exist");
-            // On Firefox, cookie_store_id should be Some(...); on Chrome, it may be None
-            match h.browser {
-                browser::Kind::Firefox => {
-                    assert!(
-                        tab.cookie_store_id.is_some(),
-                        "Firefox tabs should have a cookie_store_id",
-                    );
-                }
-                browser::Kind::Chrome => {
-                    // Chrome doesn't support containers; cookie_store_id may be None
-                }
-            }
+    let tab = tabs
+        .iter()
+        .find(|t| t.id == tab_id)
+        .expect("tab should exist");
+    // On Firefox, cookie_store_id should be Some(...); on Chrome, it may be None
+    match h.browser {
+        browser::Kind::Firefox => {
+            assert!(
+                tab.cookie_store_id.is_some(),
+                "Firefox tabs should have a cookie_store_id",
+            );
         }
-        other => panic!("expected Tabs, got {other:?}"),
+        browser::Kind::Chrome => {
+            // Chrome doesn't support containers; cookie_store_id may be None
+        }
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -359,52 +303,38 @@ async fn cli_containers_list_firefox() {
 
 // --- container_name populated in tab details ---
 
-#[expect(clippy::panic, reason = "test assertions")]
 async fn container_name_in_tab_details_body(h: &Harness) {
     let server = test_server::Server::start_plain();
     let window_id = first_window_id(h).await;
 
-    let containers_result = h
-        .send_command(CliCommand::ListContainers)
+    let containers = h
+        .client()
+        .list_containers()
         .await
         .expect("ListContainers should succeed");
-    let (container_id, container_name) = match &containers_result {
-        CliResult::Containers { containers } => {
-            assert!(!containers.is_empty(), "need a container");
-            let c = containers.first().expect("just asserted");
-            (c.cookie_store_id.clone(), c.name.clone())
-        }
-        other => panic!("expected Containers, got {other:?}"),
-    };
+    assert!(!containers.is_empty(), "need a container");
+    let c = containers.first().expect("just asserted");
+    let container_id = c.cookie_store_id.clone();
+    let container_name = c.name.clone();
 
-    let open_result = h
-        .send_command(CliCommand::OpenTab {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some(server.base_url()),
-            username: None,
-            password: None,
-            background: true,
-            cookie_store_id: Some(container_id),
-        })
+    let mut params = OpenTabParams::new(window_id);
+    params.url = Some(server.base_url());
+    params.background = true;
+    params.cookie_store_id = Some(container_id);
+    let tab = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab should succeed");
-    let tab_id = match open_result {
-        CliResult::Tab(d) => {
-            pretty_assertions::assert_eq!(
-                d.container_name.as_deref(),
-                Some(container_name.as_str()),
-                "OpenTab response should include container_name",
-            );
-            d.id
-        }
-        other => panic!("expected Tab, got {other:?}"),
-    };
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    pretty_assertions::assert_eq!(
+        tab.container_name.as_deref(),
+        Some(container_name.as_str()),
+        "OpenTab response should include container_name",
+    );
+    let tab_id = tab.id;
+
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -423,40 +353,29 @@ async fn cli_tab_cookie_store_id_matcher_body(h: &Harness) {
     let window_id = first_window_id(h).await;
 
     // Get a container
-    let containers_result = h
-        .send_command(CliCommand::ListContainers)
+    let containers = h
+        .client()
+        .list_containers()
         .await
         .expect("ListContainers should succeed");
-    let container_id = match &containers_result {
-        CliResult::Containers { containers } => {
-            assert!(!containers.is_empty(), "need a container");
-            containers
-                .first()
-                .expect("just asserted")
-                .cookie_store_id
-                .clone()
-        }
-        other => panic!("expected Containers, got {other:?}"),
-    };
+    assert!(!containers.is_empty(), "need a container");
+    let container_id = containers
+        .first()
+        .expect("just asserted")
+        .cookie_store_id
+        .clone();
 
     // Open tab in that container
-    let open_result = h
-        .send_command(CliCommand::OpenTab {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some(server.base_url()),
-            username: None,
-            password: None,
-            background: true,
-            cookie_store_id: Some(container_id.clone()),
-        })
+    let mut params = OpenTabParams::new(window_id);
+    params.url = Some(server.base_url());
+    params.background = true;
+    params.cookie_store_id = Some(container_id.clone());
+    let tab = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab should succeed");
-    let tab_id = match open_result {
-        CliResult::Tab(d) => d.id,
-        other => panic!("expected Tab, got {other:?}"),
-    };
+    let tab_id = tab.id;
 
     // Match by container via CLI
     let w = window_id.to_string();
@@ -466,7 +385,7 @@ async fn cli_tab_cookie_store_id_matcher_body(h: &Harness) {
             "tabs",
             "activate",
             "--tab-cookie-store-id",
-            &container_id,
+            &container_id.0,
             "--tab-window-id",
             &w,
         ],
@@ -480,9 +399,7 @@ async fn cli_tab_cookie_store_id_matcher_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -500,36 +417,26 @@ async fn cli_tab_container_name_matcher_body(h: &Harness) {
     let server = test_server::Server::start_plain();
     let window_id = first_window_id(h).await;
 
-    let containers_result = h
-        .send_command(CliCommand::ListContainers)
+    let containers = h
+        .client()
+        .list_containers()
         .await
         .expect("ListContainers should succeed");
-    let (container_id, container_name) = match &containers_result {
-        CliResult::Containers { containers } => {
-            assert!(!containers.is_empty(), "need a container");
-            let c = containers.first().expect("just asserted");
-            (c.cookie_store_id.clone(), c.name.clone())
-        }
-        other => panic!("expected Containers, got {other:?}"),
-    };
+    assert!(!containers.is_empty(), "need a container");
+    let c = containers.first().expect("just asserted");
+    let container_id = c.cookie_store_id.clone();
+    let container_name = c.name.clone();
 
-    let open_result = h
-        .send_command(CliCommand::OpenTab {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some(server.base_url()),
-            username: None,
-            password: None,
-            background: true,
-            cookie_store_id: Some(container_id),
-        })
+    let mut params = OpenTabParams::new(window_id);
+    params.url = Some(server.base_url());
+    params.background = true;
+    params.cookie_store_id = Some(container_id);
+    let tab = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab should succeed");
-    let tab_id = match open_result {
-        CliResult::Tab(d) => d.id,
-        other => panic!("expected Tab, got {other:?}"),
-    };
+    let tab_id = tab.id;
 
     let w = window_id.to_string();
     let stdout = run_cli(
@@ -552,9 +459,7 @@ async fn cli_tab_container_name_matcher_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]

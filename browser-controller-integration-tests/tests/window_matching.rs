@@ -18,7 +18,7 @@ use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
 use browser_controller_integration_tests::profile;
-use browser_controller_types::{CliCommand, CliResult};
+use browser_controller_types::{CliResult, WindowId};
 
 /// Run the CLI binary with the given arguments and return stdout.
 ///
@@ -72,20 +72,15 @@ async fn run_cli_expect_failure(h: &Harness, args: &[&str]) -> std::process::Exi
 }
 
 /// Helper to get the first window's ID and title via protocol.
-#[expect(clippy::panic, reason = "test helper panics on unexpected variants")]
-async fn first_window_info(h: &Harness) -> (u32, String) {
-    let result = h
-        .send_command(CliCommand::ListWindows)
+async fn first_window_info(h: &Harness) -> (WindowId, String) {
+    let windows = h
+        .client()
+        .list_windows()
         .await
         .expect("ListWindows should succeed");
-    match result {
-        CliResult::Windows { windows } => {
-            assert!(!windows.is_empty(), "need at least 1 window");
-            let w = windows.first().expect("just asserted non-empty");
-            (w.id, w.title.clone())
-        }
-        other => panic!("expected Windows, got {other:?}"),
-    }
+    assert!(!windows.is_empty(), "need at least 1 window");
+    let w = windows.first().expect("just asserted non-empty");
+    (w.id, w.title.clone())
 }
 
 // --- Test: --window-id ---
@@ -222,12 +217,10 @@ async fn match_by_window_title_prefix_body(h: &Harness, prefix: &str) {
     let (window_id, _) = first_window_info(h).await;
 
     // Set a title prefix
-    h.send_command(CliCommand::SetWindowTitlePrefix {
-        window_id,
-        prefix: prefix.to_owned(),
-    })
-    .await
-    .expect("SetWindowTitlePrefix should succeed");
+    h.client()
+        .set_window_title_prefix(window_id, prefix.to_owned())
+        .await
+        .expect("SetWindowTitlePrefix should succeed");
 
     // Give the browser a moment to update the window metadata
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -244,7 +237,8 @@ async fn match_by_window_title_prefix_body(h: &Harness, prefix: &str) {
     }
 
     // Clean up
-    h.send_command(CliCommand::RemoveWindowTitlePrefix { window_id })
+    h.client()
+        .remove_window_title_prefix(window_id)
         .await
         .expect("RemoveWindowTitlePrefix should succeed");
 }
@@ -307,17 +301,11 @@ async fn match_by_window_focused_chrome() {
 )]
 async fn match_by_window_not_focused_body(h: &Harness) {
     // Open a second window so there's a non-focused one
-    let open_result = h
-        .send_command(CliCommand::OpenWindow {
-            title_prefix: None,
-            incognito: false,
-        })
+    let new_window_id = h
+        .client()
+        .open_window(None, false)
         .await
         .expect("OpenWindow should succeed");
-    let new_window_id = match open_result {
-        CliResult::WindowId { window_id } => window_id,
-        other => panic!("expected WindowId, got {other:?}"),
-    };
 
     let stdout = run_cli(
         h,
@@ -343,11 +331,10 @@ async fn match_by_window_not_focused_body(h: &Harness) {
     }
 
     // Clean up
-    h.send_command(CliCommand::CloseWindow {
-        window_id: new_window_id,
-    })
-    .await
-    .expect("CloseWindow should succeed");
+    h.client()
+        .close_window(new_window_id)
+        .await
+        .expect("CloseWindow should succeed");
 }
 
 #[tokio::test]
@@ -408,17 +395,11 @@ async fn match_by_window_last_focused_chrome() {
 )]
 async fn match_by_window_not_last_focused_body(h: &Harness) {
     // Open a second window so there's a non-last-focused one
-    let open_result = h
-        .send_command(CliCommand::OpenWindow {
-            title_prefix: None,
-            incognito: false,
-        })
+    let new_window_id = h
+        .client()
+        .open_window(None, false)
         .await
         .expect("OpenWindow should succeed");
-    let new_window_id = match open_result {
-        CliResult::WindowId { window_id } => window_id,
-        other => panic!("expected WindowId, got {other:?}"),
-    };
 
     let stdout = run_cli(
         h,
@@ -443,11 +424,10 @@ async fn match_by_window_not_last_focused_body(h: &Harness) {
         other => panic!("expected Tabs, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseWindow {
-        window_id: new_window_id,
-    })
-    .await
-    .expect("CloseWindow should succeed");
+    h.client()
+        .close_window(new_window_id)
+        .await
+        .expect("CloseWindow should succeed");
 }
 
 #[tokio::test]
@@ -514,34 +494,23 @@ async fn match_by_window_state_chrome() {
 
 // --- Test: --if-matches-multiple abort (default behavior) ---
 
-#[expect(
-    clippy::panic,
-    reason = "test assertions use panic on unexpected variants"
-)]
 async fn match_multiple_abort_body(h: &Harness) {
     // Open a second window so there are multiple
-    let open_result = h
-        .send_command(CliCommand::OpenWindow {
-            title_prefix: None,
-            incognito: false,
-        })
+    let new_window_id = h
+        .client()
+        .open_window(None, false)
         .await
         .expect("OpenWindow should succeed");
-    let new_window_id = match open_result {
-        CliResult::WindowId { window_id } => window_id,
-        other => panic!("expected WindowId, got {other:?}"),
-    };
 
     // tabs list with --window-title-regex ".*" matches all windows;
     // default --if-matches-multiple is abort, so this should fail
     run_cli_expect_failure(h, &["tabs", "list", "--window-title-regex", ".*"]).await;
 
     // Clean up
-    h.send_command(CliCommand::CloseWindow {
-        window_id: new_window_id,
-    })
-    .await
-    .expect("CloseWindow should succeed");
+    h.client()
+        .close_window(new_window_id)
+        .await
+        .expect("CloseWindow should succeed");
 }
 
 #[tokio::test]
@@ -568,17 +537,11 @@ async fn match_multiple_abort_chrome() {
 )]
 async fn match_multiple_all_body(h: &Harness) {
     // Open a second window
-    let open_result = h
-        .send_command(CliCommand::OpenWindow {
-            title_prefix: None,
-            incognito: false,
-        })
+    let new_window_id = h
+        .client()
+        .open_window(None, false)
         .await
         .expect("OpenWindow should succeed");
-    let new_window_id = match open_result {
-        CliResult::WindowId { window_id } => window_id,
-        other => panic!("expected WindowId, got {other:?}"),
-    };
 
     // tabs list with regex matching all + --if-matches-multiple all
     let stdout = run_cli(
@@ -615,11 +578,10 @@ async fn match_multiple_all_body(h: &Harness) {
     );
 
     // Clean up
-    h.send_command(CliCommand::CloseWindow {
-        window_id: new_window_id,
-    })
-    .await
-    .expect("CloseWindow should succeed");
+    h.client()
+        .close_window(new_window_id)
+        .await
+        .expect("CloseWindow should succeed");
 }
 
 #[tokio::test]

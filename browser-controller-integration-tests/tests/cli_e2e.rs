@@ -12,11 +12,12 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
+use browser_controller_client::OpenTabParams;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
 use browser_controller_integration_tests::profile;
-use browser_controller_types::{CliCommand, CliResult};
+use browser_controller_types::CliResult;
 
 /// Run the CLI binary with the given arguments and return stdout.
 ///
@@ -92,17 +93,13 @@ async fn cli_windows_list_chrome() {
 )]
 async fn cli_tabs_list_body(h: &Harness) {
     // Get a window ID via the protocol first
-    let result = h
-        .send_command(CliCommand::ListWindows)
+    let windows = h
+        .client()
+        .list_windows()
         .await
         .expect("ListWindows should succeed");
-    let window_id = match result {
-        CliResult::Windows { windows } => {
-            assert!(!windows.is_empty(), "need at least 1 window");
-            windows.first().expect("just asserted non-empty").id
-        }
-        other => panic!("expected Windows, got {other:?}"),
-    };
+    assert!(!windows.is_empty(), "need at least 1 window");
+    let window_id = windows.first().expect("just asserted non-empty").id;
 
     let stdout = run_cli(h, &["tabs", "list", "--window-id", &window_id.to_string()]).await;
 
@@ -131,22 +128,14 @@ async fn cli_tabs_list_chrome() {
 ///
 /// Opens tabs with different URLs, sorts by domain order, and verifies
 /// the resulting tab order via the protocol.
-#[expect(
-    clippy::panic,
-    reason = "test assertions use panic on unexpected variants"
-)]
 async fn cli_tabs_sort_body(h: &Harness) {
-    let result = h
-        .send_command(CliCommand::ListWindows)
+    let windows = h
+        .client()
+        .list_windows()
         .await
         .expect("ListWindows should succeed");
-    let window_id = match result {
-        CliResult::Windows { windows } => {
-            assert!(!windows.is_empty(), "need at least 1 window");
-            windows.first().expect("just asserted non-empty").id
-        }
-        other => panic!("expected Windows, got {other:?}"),
-    };
+    assert!(!windows.is_empty(), "need at least 1 window");
+    let window_id = windows.first().expect("just asserted non-empty").id;
 
     // Open tabs with different domains
     let urls = [
@@ -156,23 +145,15 @@ async fn cli_tabs_sort_body(h: &Harness) {
     ];
     let mut tab_ids = Vec::new();
     for url in &urls {
-        let result = h
-            .send_command(CliCommand::OpenTab {
-                window_id,
-                insert_before_tab_id: None,
-                insert_after_tab_id: None,
-                url: Some((*url).to_owned()),
-                username: None,
-                password: None,
-                background: true,
-                cookie_store_id: None,
-            })
+        let mut params = OpenTabParams::new(window_id);
+        params.url = Some((*url).to_owned());
+        params.background = true;
+        let tab = h
+            .client()
+            .open_tab(params)
             .await
             .expect("OpenTab should succeed");
-        match result {
-            CliResult::Tab(details) => tab_ids.push(details.id),
-            other => panic!("expected Tab, got {other:?}"),
-        }
+        tab_ids.push(tab.id);
     }
 
     // Wait for pages to start loading
@@ -194,34 +175,32 @@ async fn cli_tabs_sort_body(h: &Harness) {
     .await;
 
     // Verify tab order: wikipedia tabs should come before google tabs
-    let result = h
-        .send_command(CliCommand::ListTabs { window_id })
+    let tabs = h
+        .client()
+        .list_tabs(window_id)
         .await
         .expect("ListTabs should succeed");
-    match result {
-        CliResult::Tabs { tabs } => {
-            // Find our test tabs by ID and check their relative order
-            let test_tabs: Vec<_> = tabs.iter().filter(|t| tab_ids.contains(&t.id)).collect();
 
-            // Find first wikipedia and first google tab among our test tabs
-            let wiki_idx = test_tabs
-                .iter()
-                .position(|t| t.url.contains("wikipedia.org"));
-            let google_idx = test_tabs.iter().position(|t| t.url.contains("google.com"));
+    // Find our test tabs by ID and check their relative order
+    let test_tabs: Vec<_> = tabs.iter().filter(|t| tab_ids.contains(&t.id)).collect();
 
-            if let (Some(wi), Some(gi)) = (wiki_idx, google_idx) {
-                assert!(
-                    wi < gi,
-                    "wikipedia tab (index {wi}) should come before google tab (index {gi}) after sort",
-                );
-            }
-        }
-        other => panic!("expected Tabs, got {other:?}"),
+    // Find first wikipedia and first google tab among our test tabs
+    let wiki_idx = test_tabs
+        .iter()
+        .position(|t| t.url.contains("wikipedia.org"));
+    let google_idx = test_tabs.iter().position(|t| t.url.contains("google.com"));
+
+    if let (Some(wi), Some(gi)) = (wiki_idx, google_idx) {
+        assert!(
+            wi < gi,
+            "wikipedia tab (index {wi}) should come before google tab (index {gi}) after sort",
+        );
     }
 
     // Cleanup: close all test tabs
     for tab_id in tab_ids {
-        h.send_command(CliCommand::CloseTab { tab_id })
+        h.client()
+            .close_tab(tab_id)
             .await
             .expect("CloseTab should succeed");
     }

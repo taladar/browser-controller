@@ -9,53 +9,42 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
+use browser_controller_client::OpenTabParams;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
-use browser_controller_types::{CliCommand, CliResult};
+use browser_controller_types::WindowId;
 
 /// Helper to get the first window ID.
 ///
 /// # Panics
 ///
 /// Panics if `ListWindows` fails or returns no windows.
-#[expect(clippy::panic, reason = "test helper panics on unexpected variants")]
-async fn first_window_id(h: &Harness) -> u32 {
-    let result = h
-        .send_command(CliCommand::ListWindows)
+async fn first_window_id(h: &Harness) -> WindowId {
+    let windows = h
+        .client()
+        .list_windows()
         .await
         .expect("ListWindows should succeed");
-    match result {
-        CliResult::Windows { windows } => {
-            assert!(!windows.is_empty(), "need at least 1 window");
-            windows.first().expect("just asserted non-empty").id
-        }
-        other => panic!("expected Windows, got {other:?}"),
-    }
+    assert!(!windows.is_empty(), "need at least 1 window");
+    windows.first().expect("just asserted non-empty").id
 }
 
 /// Helper to count tabs in a window.
 ///
 /// # Panics
 ///
-/// Panics if `ListTabs` fails or returns unexpected variant.
-#[expect(clippy::panic, reason = "test helper panics on unexpected variants")]
-async fn tab_count(h: &Harness, window_id: u32) -> usize {
-    let result = h
-        .send_command(CliCommand::ListTabs { window_id })
+/// Panics if `ListTabs` fails.
+async fn tab_count(h: &Harness, window_id: WindowId) -> usize {
+    let tabs = h
+        .client()
+        .list_tabs(window_id)
         .await
         .expect("ListTabs should succeed");
-    match result {
-        CliResult::Tabs { tabs } => tabs.len(),
-        other => panic!("expected Tabs, got {other:?}"),
-    }
+    tabs.len()
 }
 
 /// Shared open/close tab test body.
-#[expect(
-    clippy::panic,
-    reason = "test assertions use panic on unexpected variants"
-)]
 #[expect(
     clippy::arithmetic_side_effects,
     reason = "tab count arithmetic in test assertions cannot overflow in practice"
@@ -65,31 +54,20 @@ async fn open_close_tab_body(h: &Harness) {
     let initial_count = tab_count(h, window_id).await;
 
     // Open a new tab
-    let open_result = h
-        .send_command(CliCommand::OpenTab {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some("about:blank".to_owned()),
-            username: None,
-            password: None,
-            background: false,
-            cookie_store_id: None,
-        })
+    let mut params = OpenTabParams::new(window_id);
+    params.url = Some("about:blank".to_owned());
+    let details = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab should succeed");
 
-    let new_tab_id = match open_result {
-        CliResult::Tab(details) => {
-            pretty_assertions::assert_eq!(
-                details.window_id,
-                window_id,
-                "new tab should be in the requested window",
-            );
-            details.id
-        }
-        other => panic!("expected Tab, got {other:?}"),
-    };
+    pretty_assertions::assert_eq!(
+        details.window_id,
+        window_id,
+        "new tab should be in the requested window",
+    );
+    let new_tab_id = details.id;
 
     // Verify tab count increased
     let after_open_count = tab_count(h, window_id).await;
@@ -100,7 +78,8 @@ async fn open_close_tab_body(h: &Harness) {
     );
 
     // Close the tab
-    h.send_command(CliCommand::CloseTab { tab_id: new_tab_id })
+    h.client()
+        .close_tab(new_tab_id)
         .await
         .expect("CloseTab should succeed");
 
@@ -124,68 +103,49 @@ async fn open_close_tab_chrome() {
 }
 
 /// Shared navigate tab test body.
-#[expect(
-    clippy::panic,
-    reason = "test assertions use panic on unexpected variants"
-)]
 async fn navigate_tab_body(h: &Harness) {
     let server = browser_controller_integration_tests::test_server::Server::start_plain();
     let window_id = first_window_id(h).await;
 
     // Open a tab with about:blank
-    let open_result = h
-        .send_command(CliCommand::OpenTab {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some("about:blank".to_owned()),
-            username: None,
-            password: None,
-            background: false,
-            cookie_store_id: None,
-        })
+    let mut params = OpenTabParams::new(window_id);
+    params.url = Some("about:blank".to_owned());
+    let details = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab should succeed");
-
-    let tab_id = match open_result {
-        CliResult::Tab(details) => details.id,
-        other => panic!("expected Tab, got {other:?}"),
-    };
+    let tab_id = details.id;
 
     // Navigate to local test server
     let target_url = server.base_url();
-    h.send_command(CliCommand::NavigateTab {
-        tab_id,
-        url: target_url.clone(),
-    })
-    .await
-    .expect("NavigateTab should succeed");
+    h.client()
+        .navigate_tab(tab_id, target_url.clone())
+        .await
+        .expect("NavigateTab should succeed");
 
     // Give the tab time to finish navigation
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // Verify the URL changed
-    let tabs_result = h
-        .send_command(CliCommand::ListTabs { window_id })
+    let tabs = h
+        .client()
+        .list_tabs(window_id)
         .await
         .expect("ListTabs should succeed");
 
-    match tabs_result {
-        CliResult::Tabs { tabs } => {
-            let tab = tabs.iter().find(|t| t.id == tab_id);
-            assert!(tab.is_some(), "tab {tab_id} should still exist");
-            let tab = tab.expect("just asserted it exists");
-            assert!(
-                tab.url.starts_with(&target_url),
-                "tab URL should start with {target_url} after NavigateTab, got {}",
-                tab.url,
-            );
-        }
-        other => panic!("expected Tabs, got {other:?}"),
-    }
+    let tab = tabs.iter().find(|t| t.id == tab_id);
+    assert!(tab.is_some(), "tab {tab_id} should still exist");
+    let tab = tab.expect("just asserted it exists");
+    assert!(
+        tab.url.starts_with(&target_url),
+        "tab URL should start with {target_url} after NavigateTab, got {}",
+        tab.url,
+    );
 
     // Cleanup: close the tab
-    h.send_command(CliCommand::CloseTab { tab_id })
+    h.client()
+        .close_tab(tab_id)
         .await
         .expect("CloseTab should succeed");
 }

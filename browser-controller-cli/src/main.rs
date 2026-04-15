@@ -6,7 +6,8 @@
 use std::time::Duration;
 
 use browser_controller_client::{
-    CliCommand, CliRequest, CliResult, Client, DiscoveredInstance, TabStatus, WindowState,
+    CliCommand, CliRequest, CliResult, Client, CookieStoreId, DiscoveredInstance, DownloadId,
+    OpenTabParams, TabId, TabStatus, WindowId, WindowState,
 };
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
 use tracing_subscriber::{
@@ -53,12 +54,6 @@ pub enum Error {
     /// Shell completion generation failed.
     #[error("failed to generate shell completion: {0}")]
     GenerateShellCompletion(#[source] std::io::Error),
-
-    /// A command timed out waiting for a response.
-    #[error(
-        "command timed out after {0}s (the extension may have been reloaded or the page may not finish loading)"
-    )]
-    CommandTimeout(u64),
 }
 
 /// Browser to install the native messaging host manifest for (CLI argument type).
@@ -192,7 +187,7 @@ impl From<TabStatusArg> for TabStatus {
 pub struct CliWindowMatcher {
     /// Match a window by its exact browser-assigned numeric ID.
     #[clap(long)]
-    pub window_id: Option<u32>,
+    pub window_id: Option<WindowId>,
     /// Match windows whose full title equals this string exactly.
     #[clap(long)]
     pub window_title: Option<String>,
@@ -274,7 +269,7 @@ impl From<&CliWindowMatcher> for browser_controller_client::WindowMatcher {
 pub struct CliTabMatcher {
     /// Match a tab by its exact browser-assigned numeric ID.
     #[clap(long)]
-    pub tab_id: Option<u32>,
+    pub tab_id: Option<TabId>,
     /// Match tabs whose title equals this string exactly.
     #[clap(long)]
     pub tab_title: Option<String>,
@@ -292,7 +287,7 @@ pub struct CliTabMatcher {
     pub tab_url_regex: Option<String>,
     /// Restrict the search to tabs belonging to the window with this ID.
     #[clap(long)]
-    pub tab_window_id: Option<u32>,
+    pub tab_window_id: Option<WindowId>,
     /// Match only the currently active tab in each window.
     #[clap(long)]
     pub tab_active: bool,
@@ -346,7 +341,7 @@ pub struct CliTabMatcher {
     pub tab_status: Option<TabStatusArg>,
     /// Match only tabs in a specific Firefox container (by cookie store ID).
     #[clap(long)]
-    pub tab_cookie_store_id: Option<String>,
+    pub tab_cookie_store_id: Option<CookieStoreId>,
     /// Match only tabs in a specific Firefox container (by container name).
     #[clap(long)]
     pub tab_container_name: Option<String>,
@@ -639,10 +634,10 @@ pub enum TabsCommand {
         window: CliWindowMatcher,
         /// Insert the new tab immediately before the tab with this ID.
         #[clap(long, conflicts_with = "after")]
-        before: Option<u32>,
+        before: Option<TabId>,
         /// Insert the new tab immediately after the tab with this ID.
         #[clap(long, conflicts_with = "before")]
-        after: Option<u32>,
+        after: Option<TabId>,
         /// URL to load in the new tab (defaults to the browser's new-tab page).
         #[clap(long)]
         url: Option<String>,
@@ -678,7 +673,7 @@ pub enum TabsCommand {
         /// E.g. `firefox-container-1`. Use `containers list` to see available containers.
         /// Ignored on browsers without container support.
         #[clap(long)]
-        container: Option<String>,
+        container: Option<CookieStoreId>,
     },
     /// Activate a tab, making it the focused tab in its window.
     Activate {
@@ -705,7 +700,7 @@ pub enum TabsCommand {
         tab: CliTabMatcher,
         /// Target container's cookie store ID (e.g. `firefox-container-1`).
         #[clap(long)]
-        container: String,
+        container: CookieStoreId,
     },
     /// Reload one or more tabs.
     Reload {
@@ -903,31 +898,31 @@ pub enum DownloadsCommand {
     Cancel {
         /// Download ID to cancel.
         #[clap(long)]
-        id: u32,
+        id: DownloadId,
     },
     /// Pause an active download.
     Pause {
         /// Download ID to pause.
         #[clap(long)]
-        id: u32,
+        id: DownloadId,
     },
     /// Resume a paused download.
     Resume {
         /// Download ID to resume.
         #[clap(long)]
-        id: u32,
+        id: DownloadId,
     },
     /// Retry an interrupted download by re-downloading from the same URL.
     Retry {
         /// Download ID to retry.
         #[clap(long)]
-        id: u32,
+        id: DownloadId,
     },
     /// Remove a download from the browser's history (the file stays on disk).
     Erase {
         /// Download ID to remove.
         #[clap(long)]
-        id: u32,
+        id: DownloadId,
     },
     /// Clear all downloads from history, optionally filtered by state.
     Clear {
@@ -1149,8 +1144,8 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
         }
         CliResult::Downloads { downloads } => {
             for dl in downloads {
-                let progress = if dl.total_bytes > 0 {
-                    format!("{}/{} bytes", dl.bytes_received, dl.total_bytes)
+                let progress = if let Some(total) = dl.total_bytes {
+                    format!("{}/{} bytes", dl.bytes_received, total)
                 } else {
                     format!("{} bytes", dl.bytes_received)
                 };
@@ -1423,15 +1418,7 @@ async fn do_stuff() -> Result<(), Error> {
         return Ok(());
     }
 
-    let timeout_secs = cli.timeout;
-    let command_future = execute_command(cli, instance);
-    if timeout_secs == 0 {
-        command_future.await
-    } else {
-        tokio::time::timeout(Duration::from_secs(timeout_secs), command_future)
-            .await
-            .map_err(|_elapsed| Error::CommandTimeout(timeout_secs))?
-    }
+    execute_command(cli, instance).await
 }
 
 /// Execute the selected command against the given browser instance.
@@ -1440,12 +1427,15 @@ async fn do_stuff() -> Result<(), Error> {
 ///
 /// Returns an error if the command fails.
 async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), Error> {
-    let client = Client::new(instance.socket_path.clone());
+    let client = Client::new(
+        instance.socket_path.clone(),
+        Duration::from_secs(cli.timeout),
+    );
     match cli.command {
         Command::Windows(w) => match w.command {
             WindowsCommand::List => {
-                let result = client.send_command(CliCommand::ListWindows).await?;
-                print_result(&result, cli.output)?;
+                let windows = client.list_windows().await?;
+                print_result(&CliResult::Windows { windows }, cli.output)?;
             }
             WindowsCommand::Open {
                 title_prefix,
@@ -1454,12 +1444,7 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
             } => {
                 // Guard: skip opening if a window with the required prefix already exists.
                 if if_title_prefix_does_not_exist && let Some(ref required_prefix) = title_prefix {
-                    let list_result = client.send_command(CliCommand::ListWindows).await?;
-                    let CliResult::Windows { windows } = list_result else {
-                        return Err(Error::CommandFailed(format!(
-                            "unexpected response to ListWindows: {list_result:?}"
-                        )));
-                    };
+                    let windows = client.list_windows().await?;
                     if windows
                         .iter()
                         .any(|w| w.title_prefix.as_deref() == Some(required_prefix.as_str()))
@@ -1467,13 +1452,8 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                         return Ok(());
                     }
                 }
-                let result = client
-                    .send_command(CliCommand::OpenWindow {
-                        title_prefix,
-                        incognito,
-                    })
-                    .await?;
-                print_result(&result, cli.output)?;
+                let window_id = client.open_window(title_prefix, incognito).await?;
+                print_result(&CliResult::WindowId { window_id }, cli.output)?;
             }
             WindowsCommand::Close { window } => {
                 // Zero matches is not an error for close — the desired state
@@ -1484,31 +1464,24 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     Err(e) => return Err(e.into()),
                 };
                 for window_id in window_ids {
-                    let result = client
-                        .send_command(CliCommand::CloseWindow { window_id })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    client.close_window(window_id).await?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
             WindowsCommand::SetTitlePrefix { window, prefix } => {
                 let window_ids = client.resolve_windows(&(&window).into()).await?;
                 for window_id in window_ids {
-                    let result = client
-                        .send_command(CliCommand::SetWindowTitlePrefix {
-                            window_id,
-                            prefix: prefix.clone(),
-                        })
+                    client
+                        .set_window_title_prefix(window_id, prefix.clone())
                         .await?;
-                    print_result(&result, cli.output)?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
             WindowsCommand::RemoveTitlePrefix { window } => {
                 let window_ids = client.resolve_windows(&(&window).into()).await?;
                 for window_id in window_ids {
-                    let result = client
-                        .send_command(CliCommand::RemoveWindowTitlePrefix { window_id })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    client.remove_window_title_prefix(window_id).await?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
         },
@@ -1516,10 +1489,8 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
             TabsCommand::List { window } => {
                 let window_ids = client.resolve_windows(&(&window).into()).await?;
                 for window_id in window_ids {
-                    let result = client
-                        .send_command(CliCommand::ListTabs { window_id })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    let tabs = client.list_tabs(window_id).await?;
+                    print_result(&CliResult::Tabs { tabs }, cli.output)?;
                 }
             }
             TabsCommand::Open {
@@ -1535,12 +1506,7 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
             } => {
                 // Guard: skip opening if a tab with the given URL already exists anywhere.
                 if if_url_does_not_exist && let Some(ref check_url) = url {
-                    let list_result = client.send_command(CliCommand::ListWindows).await?;
-                    let CliResult::Windows { windows } = list_result else {
-                        return Err(Error::CommandFailed(format!(
-                            "unexpected response to ListWindows: {list_result:?}"
-                        )));
-                    };
+                    let windows = client.list_windows().await?;
                     let normalized = browser_controller_client::strip_url_credentials(check_url);
                     let already_exists = windows.iter().flat_map(|w| &w.tabs).any(|t| {
                         browser_controller_client::strip_url_credentials(&t.url) == normalized
@@ -1562,64 +1528,46 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
 
                 let window_ids = client.resolve_windows(&(&window).into()).await?;
                 for window_id in window_ids {
-                    let result = client
-                        .send_command(CliCommand::OpenTab {
-                            window_id,
-                            insert_before_tab_id: before,
-                            insert_after_tab_id: after,
-                            url: url.clone(),
-                            username: username.clone(),
-                            password: password.clone(),
-                            background,
-                            cookie_store_id: container.clone(),
-                        })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    let mut params = OpenTabParams::new(window_id);
+                    params.insert_before_tab_id = before;
+                    params.insert_after_tab_id = after;
+                    params.url = url.clone();
+                    params.username = username.clone();
+                    params.password = password.clone();
+                    params.background = background;
+                    params.cookie_store_id = container.clone();
+                    let tab = client.open_tab(params).await?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::Activate { tab } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client
-                        .send_command(CliCommand::ActivateTab { tab_id })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    client.activate_tab(tab_id).await?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
             TabsCommand::Navigate { tab, url } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client
-                        .send_command(CliCommand::NavigateTab {
-                            tab_id,
-                            url: url.clone(),
-                        })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    client.navigate_tab(tab_id, url.clone()).await?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
             TabsCommand::ReopenInContainer { tab, container } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client
-                        .send_command(CliCommand::ReopenTabInContainer {
-                            tab_id,
-                            cookie_store_id: container.clone(),
-                        })
+                    let tab = client
+                        .reopen_tab_in_container(tab_id, container.clone())
                         .await?;
-                    print_result(&result, cli.output)?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::Reload { tab, bypass_cache } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client
-                        .send_command(CliCommand::ReloadTab {
-                            tab_id,
-                            bypass_cache,
-                        })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    client.reload_tab(tab_id, bypass_cache).await?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
             TabsCommand::Close { tab } => {
@@ -1631,106 +1579,84 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     Err(e) => return Err(e.into()),
                 };
                 for tab_id in tab_ids {
-                    let result = client.send_command(CliCommand::CloseTab { tab_id }).await?;
-                    print_result(&result, cli.output)?;
+                    client.close_tab(tab_id).await?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
             TabsCommand::Pin { tab } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client.send_command(CliCommand::PinTab { tab_id }).await?;
-                    print_result(&result, cli.output)?;
+                    client.pin_tab(tab_id).await?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
             TabsCommand::Unpin { tab } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client.send_command(CliCommand::UnpinTab { tab_id }).await?;
-                    print_result(&result, cli.output)?;
+                    client.unpin_tab(tab_id).await?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
             TabsCommand::ToggleReaderMode { tab } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client
-                        .send_command(CliCommand::ToggleReaderMode { tab_id })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    client.toggle_reader_mode(tab_id).await?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
             TabsCommand::Discard { tab } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client
-                        .send_command(CliCommand::DiscardTab { tab_id })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    client.discard_tab(tab_id).await?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
             TabsCommand::Warmup { tab } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client
-                        .send_command(CliCommand::WarmupTab { tab_id })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    client.warmup_tab(tab_id).await?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
             TabsCommand::Mute { tab } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client.send_command(CliCommand::MuteTab { tab_id }).await?;
-                    print_result(&result, cli.output)?;
+                    client.mute_tab(tab_id).await?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
             TabsCommand::Unmute { tab } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client
-                        .send_command(CliCommand::UnmuteTab { tab_id })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    client.unmute_tab(tab_id).await?;
+                    print_result(&CliResult::Unit, cli.output)?;
                 }
             }
             TabsCommand::Move { tab, new_index } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client
-                        .send_command(CliCommand::MoveTab { tab_id, new_index })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    let tab = client.move_tab(tab_id, new_index).await?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::Back { tab, steps } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client
-                        .send_command(CliCommand::GoBack { tab_id, steps })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    let tab = client.go_back(tab_id, steps).await?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::Forward { tab, steps } => {
                 let tab_ids = client.resolve_tabs(&(&tab).into()).await?;
                 for tab_id in tab_ids {
-                    let result = client
-                        .send_command(CliCommand::GoForward { tab_id, steps })
-                        .await?;
-                    print_result(&result, cli.output)?;
+                    let tab = client.go_forward(tab_id, steps).await?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::Sort { window, domains } => {
                 let window_ids = client.resolve_windows(&(&window).into()).await?;
                 for window_id in window_ids {
-                    let list_tabs_result = client
-                        .send_command(CliCommand::ListTabs { window_id })
-                        .await?;
-
-                    let CliResult::Tabs { mut tabs } = list_tabs_result else {
-                        return Err(Error::CommandFailed(format!(
-                            "unexpected response to ListTabs: {list_tabs_result:?}"
-                        )));
-                    };
+                    let mut tabs = client.list_tabs(window_id).await?;
 
                     // Store original indices to maintain stable sort for unlisted domains
                     // and same domains.
@@ -1786,12 +1712,7 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                                 clippy::cast_possible_truncation,
                                 reason = "Tab index values (and for that matter values coming out of enumerate) are small enough that overflows are never an issue"
                             )]
-                            client
-                                .send_command(CliCommand::MoveTab {
-                                    tab_id: tab.id,
-                                    new_index: new_index as u32,
-                                })
-                                .await?;
+                            drop(client.move_tab(tab.id, new_index as u32).await?);
                         }
                     }
                 }
@@ -1803,14 +1724,10 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 limit,
                 query,
             } => {
-                let result = client
-                    .send_command(CliCommand::ListDownloads {
-                        state: state.map(Into::into),
-                        limit,
-                        query,
-                    })
+                let downloads = client
+                    .list_downloads(state.map(Into::into), limit, query)
                     .await?;
-                print_result(&result, cli.output)?;
+                print_result(&CliResult::Downloads { downloads }, cli.output)?;
             }
             DownloadsCommand::Start {
                 url,
@@ -1818,59 +1735,40 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 save_as,
                 conflict_action,
             } => {
-                let result = client
-                    .send_command(CliCommand::StartDownload {
-                        url,
-                        filename,
-                        save_as,
-                        conflict_action: conflict_action.map(Into::into),
-                    })
+                let download_id = client
+                    .start_download(url, filename, save_as, conflict_action.map(Into::into))
                     .await?;
-                print_result(&result, cli.output)?;
+                print_result(&CliResult::DownloadId { download_id }, cli.output)?;
             }
             DownloadsCommand::Cancel { id } => {
-                let result = client
-                    .send_command(CliCommand::CancelDownload { download_id: id })
-                    .await?;
-                print_result(&result, cli.output)?;
+                client.cancel_download(id).await?;
+                print_result(&CliResult::Unit, cli.output)?;
             }
             DownloadsCommand::Pause { id } => {
-                let result = client
-                    .send_command(CliCommand::PauseDownload { download_id: id })
-                    .await?;
-                print_result(&result, cli.output)?;
+                client.pause_download(id).await?;
+                print_result(&CliResult::Unit, cli.output)?;
             }
             DownloadsCommand::Resume { id } => {
-                let result = client
-                    .send_command(CliCommand::ResumeDownload { download_id: id })
-                    .await?;
-                print_result(&result, cli.output)?;
+                client.resume_download(id).await?;
+                print_result(&CliResult::Unit, cli.output)?;
             }
             DownloadsCommand::Retry { id } => {
-                let result = client
-                    .send_command(CliCommand::RetryDownload { download_id: id })
-                    .await?;
-                print_result(&result, cli.output)?;
+                client.retry_download(id).await?;
+                print_result(&CliResult::Unit, cli.output)?;
             }
             DownloadsCommand::Erase { id } => {
-                let result = client
-                    .send_command(CliCommand::EraseDownload { download_id: id })
-                    .await?;
-                print_result(&result, cli.output)?;
+                client.erase_download(id).await?;
+                print_result(&CliResult::Unit, cli.output)?;
             }
             DownloadsCommand::Clear { state } => {
-                let result = client
-                    .send_command(CliCommand::EraseAllDownloads {
-                        state: state.map(Into::into),
-                    })
-                    .await?;
-                print_result(&result, cli.output)?;
+                client.erase_all_downloads(state.map(Into::into)).await?;
+                print_result(&CliResult::Unit, cli.output)?;
             }
         },
         Command::Containers(c) => match c.command {
             ContainersCommand::List => {
-                let result = client.send_command(CliCommand::ListContainers).await?;
-                print_result(&result, cli.output)?;
+                let containers = client.list_containers().await?;
+                print_result(&CliResult::Containers { containers }, cli.output)?;
             }
         },
         // Already handled above.
@@ -1973,13 +1871,14 @@ async fn main() {
 #[cfg(test)]
 mod test {
     use browser_controller_client::{
-        TabDetails, TabStatus, WindowState, WindowSummary, match_tabs, match_windows,
+        TabDetails, TabId, TabStatus, WindowId, WindowState, WindowSummary, match_tabs,
+        match_windows,
     };
 
     /// Build a minimal [`WindowSummary`] for use in tests.
     fn make_window(id: u32, title: &str) -> WindowSummary {
         WindowSummary::new(
-            id,
+            WindowId(id),
             title.to_owned(),
             None,
             false,
@@ -2004,9 +1903,9 @@ mod test {
         fn new(id: u32, window_id: u32) -> Self {
             Self {
                 inner: TabDetails::new(
-                    id,
+                    TabId(id),
                     0,
-                    window_id,
+                    WindowId(window_id),
                     String::new(),
                     String::new(),
                     false,
@@ -2057,11 +1956,11 @@ mod test {
     fn match_windows_by_id() -> Result<(), crate::Error> {
         let windows = vec![make_window(1, "Window One"), make_window(2, "Window Two")];
         let m = browser_controller_client::WindowMatcher {
-            window_id: Some(1),
+            window_id: Some(WindowId(1)),
             ..Default::default()
         };
         let ids = match_windows(&windows, &m)?;
-        pretty_assertions::assert_eq!(ids, vec![1u32]);
+        pretty_assertions::assert_eq!(ids, vec![WindowId(1)]);
         Ok(())
     }
 
@@ -2074,7 +1973,7 @@ mod test {
             ..Default::default()
         };
         let ids = match_windows(&windows, &m)?;
-        pretty_assertions::assert_eq!(ids, vec![1u32]);
+        pretty_assertions::assert_eq!(ids, vec![WindowId(1)]);
         Ok(())
     }
 
@@ -2086,11 +1985,11 @@ mod test {
             make_tab(11, 1, "Tab B", "https://other.com"),
         ];
         let m = browser_controller_client::TabMatcher {
-            tab_id: Some(10),
+            tab_id: Some(TabId(10)),
             ..Default::default()
         };
         let ids = match_tabs(&tabs, &m)?;
-        pretty_assertions::assert_eq!(ids, vec![10u32]);
+        pretty_assertions::assert_eq!(ids, vec![TabId(10)]);
         Ok(())
     }
 
@@ -2106,7 +2005,7 @@ mod test {
             ..Default::default()
         };
         let ids = match_tabs(&tabs, &m)?;
-        pretty_assertions::assert_eq!(ids, vec![10u32]);
+        pretty_assertions::assert_eq!(ids, vec![TabId(10)]);
         Ok(())
     }
 }

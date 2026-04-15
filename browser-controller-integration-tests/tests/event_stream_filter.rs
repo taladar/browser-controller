@@ -9,12 +9,13 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
+use browser_controller_client::OpenTabParams;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
 use browser_controller_integration_tests::profile;
 use browser_controller_integration_tests::test_server;
-use browser_controller_types::{CliCommand, CliResult};
+use browser_controller_types::{DownloadId, TabId, WindowId};
 
 /// Spawn the CLI event-stream command as a background process with the given
 /// extra flags, returning the child process. The caller must kill it when done.
@@ -62,57 +63,35 @@ async fn collect_output(child: &mut tokio::process::Child, timeout: std::time::D
 }
 
 /// Helper to get the first window ID.
-#[expect(clippy::panic, reason = "test helper")]
-async fn first_window_id(h: &Harness) -> u32 {
-    let result = h
-        .send_command(CliCommand::ListWindows)
+async fn first_window_id(h: &Harness) -> WindowId {
+    let windows = h
+        .client()
+        .list_windows()
         .await
         .expect("ListWindows should succeed");
-    match result {
-        CliResult::Windows { windows } => {
-            assert!(!windows.is_empty(), "need at least 1 window");
-            windows.first().expect("just asserted non-empty").id
-        }
-        other => panic!("expected Windows, got {other:?}"),
-    }
+    assert!(!windows.is_empty(), "need at least 1 window");
+    windows.first().expect("just asserted non-empty").id
 }
 
-/// Open a tab and return its ID (0 on unexpected result).
-async fn open_test_tab(h: &Harness, window_id: u32) -> u32 {
-    let result = h
-        .send_command(CliCommand::OpenTab {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some("about:blank".to_owned()),
-            username: None,
-            password: None,
-            background: true,
-            cookie_store_id: None,
-        })
+/// Open a tab and return its ID.
+async fn open_test_tab(h: &Harness, window_id: WindowId) -> TabId {
+    let mut params = OpenTabParams::new(window_id);
+    params.url = Some("about:blank".to_owned());
+    params.background = true;
+    let tab = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab should succeed");
-    match result {
-        CliResult::Tab(d) => d.id,
-        _ => 0,
-    }
+    tab.id
 }
 
-/// Start a download and return its ID (0 on unexpected result).
-async fn start_test_download(h: &Harness, url: &str) -> u32 {
-    let result = h
-        .send_command(CliCommand::StartDownload {
-            url: url.to_owned(),
-            filename: None,
-            save_as: false,
-            conflict_action: None,
-        })
+/// Start a download and return its ID.
+async fn start_test_download(h: &Harness, url: &str) -> DownloadId {
+    h.client()
+        .start_download(url.to_owned(), None, false, None)
         .await
-        .expect("StartDownload should succeed");
-    match result {
-        CliResult::DownloadId { download_id } => download_id,
-        _ => 0,
-    }
+        .expect("StartDownload should succeed")
 }
 
 // --- --downloads flag: only download events ---
@@ -144,14 +123,11 @@ async fn event_stream_downloads_only_body(h: &Harness) {
     );
 
     // Cleanup
-    if tab_id > 0 {
-        drop(h.send_command(CliCommand::CloseTab { tab_id }).await);
+    if tab_id > TabId(0) {
+        drop(h.client().close_tab(tab_id).await);
     }
-    if download_id > 0 {
-        drop(
-            h.send_command(CliCommand::EraseDownload { download_id })
-                .await,
-        );
+    if download_id > DownloadId(0) {
+        drop(h.client().erase_download(download_id).await);
     }
 }
 
@@ -200,14 +176,11 @@ async fn event_stream_windows_tabs_only_body(h: &Harness) {
     );
 
     // Cleanup
-    if tab_id > 0 {
-        drop(h.send_command(CliCommand::CloseTab { tab_id }).await);
+    if tab_id > TabId(0) {
+        drop(h.client().close_tab(tab_id).await);
     }
-    if download_id > 0 {
-        drop(
-            h.send_command(CliCommand::EraseDownload { download_id })
-                .await,
-        );
+    if download_id > DownloadId(0) {
+        drop(h.client().erase_download(download_id).await);
     }
 }
 

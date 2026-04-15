@@ -6,13 +6,14 @@
 //! # Quick start
 //!
 //! ```no_run
+//! use std::time::Duration;
 //! use browser_controller_client::{Client, discover_instances, select_instance, socket_dir};
 //!
 //! # async fn example() -> Result<(), browser_controller_client::Error> {
 //! let instances = discover_instances().await?;
 //! let dir = socket_dir()?;
 //! let instance = select_instance(&instances, None, &dir)?;
-//! let client = Client::new(instance.socket_path.clone());
+//! let client = Client::new(instance.socket_path.clone(), Duration::from_secs(30));
 //! let info = client.browser_info().await?;
 //! println!("Connected to {} {}", info.browser_name, info.browser_version);
 //! # Ok(())
@@ -32,7 +33,7 @@ mod matchers;
 mod rdp;
 mod url_util;
 
-pub use client::Client;
+pub use client::{Client, OpenTabParams};
 pub use discovery::{DiscoveredInstance, discover_instances, select_instance, socket_dir};
 pub use error::Error;
 pub use event_stream::EventStream;

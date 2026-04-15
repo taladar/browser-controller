@@ -1,6 +1,8 @@
 //! Window and tab matchers for filtering browser entities by criteria.
 
-use browser_controller_types::{TabDetails, TabStatus, WindowState, WindowSummary};
+use browser_controller_types::{
+    CookieStoreId, TabDetails, TabId, TabStatus, WindowId, WindowState, WindowSummary,
+};
 use regex::Regex;
 
 use crate::Error;
@@ -32,7 +34,7 @@ pub enum MultipleMatchBehavior {
 #[derive(Debug, Default)]
 pub struct WindowMatcher {
     /// Match a window by its exact browser-assigned numeric ID.
-    pub window_id: Option<u32>,
+    pub window_id: Option<WindowId>,
     /// Match windows whose full title equals this string exactly.
     pub window_title: Option<String>,
     /// Match windows whose title prefix (Firefox `titlePreface`) equals this string exactly.
@@ -104,7 +106,7 @@ impl std::fmt::Display for WindowMatcher {
 #[derive(Debug, Default)]
 pub struct TabMatcher {
     /// Match a tab by its exact browser-assigned numeric ID.
-    pub tab_id: Option<u32>,
+    pub tab_id: Option<TabId>,
     /// Match tabs whose title equals this string exactly.
     pub tab_title: Option<String>,
     /// Match tabs whose title matches this regular expression.
@@ -116,7 +118,7 @@ pub struct TabMatcher {
     /// Match tabs whose URL matches this regular expression.
     pub tab_url_regex: Option<String>,
     /// Restrict the search to tabs belonging to the window with this ID.
-    pub tab_window_id: Option<u32>,
+    pub tab_window_id: Option<WindowId>,
     /// Match only the currently active tab in each window.
     pub tab_active: bool,
     /// Match only tabs that are not the active tab in their window.
@@ -152,7 +154,7 @@ pub struct TabMatcher {
     /// Match only tabs with this loading status.
     pub tab_status: Option<TabStatus>,
     /// Match only tabs in a specific Firefox container (by cookie store ID).
-    pub tab_cookie_store_id: Option<String>,
+    pub tab_cookie_store_id: Option<CookieStoreId>,
     /// Match only tabs in a specific Firefox container (by container name).
     pub tab_container_name: Option<String>,
     /// How to handle a criterion that matches multiple tabs.
@@ -236,7 +238,7 @@ impl std::fmt::Display for TabMatcher {
             parts.push(format!("tab-status={status:?}"));
         }
         if let Some(ref id) = self.tab_cookie_store_id {
-            parts.push(format!("tab-cookie-store-id={id:?}"));
+            parts.push(format!("tab-cookie-store-id={:?}", id.0));
         }
         if let Some(ref name) = self.tab_container_name {
             parts.push(format!("tab-container-name={name:?}"));
@@ -256,7 +258,7 @@ impl std::fmt::Display for TabMatcher {
 /// # Errors
 ///
 /// Returns [`Error::InvalidRegex`] if `window_title_regex` cannot be compiled.
-pub fn match_windows(windows: &[WindowSummary], m: &WindowMatcher) -> Result<Vec<u32>, Error> {
+pub fn match_windows(windows: &[WindowSummary], m: &WindowMatcher) -> Result<Vec<WindowId>, Error> {
     let title_regex = m
         .window_title_regex
         .as_deref()
@@ -317,7 +319,7 @@ pub fn match_windows(windows: &[WindowSummary], m: &WindowMatcher) -> Result<Vec
 /// # Errors
 ///
 /// Returns [`Error::InvalidRegex`] if a regex pattern cannot be compiled.
-pub fn match_tabs(tabs: &[TabDetails], m: &TabMatcher) -> Result<Vec<u32>, Error> {
+pub fn match_tabs(tabs: &[TabDetails], m: &TabMatcher) -> Result<Vec<TabId>, Error> {
     let title_regex = m.tab_title_regex.as_deref().map(Regex::new).transpose()?;
     let url_regex = m.tab_url_regex.as_deref().map(Regex::new).transpose()?;
 
@@ -416,9 +418,7 @@ pub fn match_tabs(tabs: &[TabDetails], m: &TabMatcher) -> Result<Vec<u32>, Error
             {
                 return false;
             }
-            if let Some(ref id) = m.tab_cookie_store_id
-                && tab.cookie_store_id.as_deref() != Some(id.as_str())
-            {
+            if m.tab_cookie_store_id.is_some() && tab.cookie_store_id != m.tab_cookie_store_id {
                 return false;
             }
             if let Some(ref name) = m.tab_container_name

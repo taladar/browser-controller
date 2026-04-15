@@ -14,12 +14,13 @@
     reason = "panicking on unexpected failure is acceptable in tests"
 )]
 
+use browser_controller_client::OpenTabParams;
 use browser_controller_integration_tests::Harness;
 use browser_controller_integration_tests::browser;
 use browser_controller_integration_tests::harness;
 use browser_controller_integration_tests::profile;
 use browser_controller_integration_tests::test_server;
-use browser_controller_types::{CliCommand, CliResult};
+use browser_controller_types::{CliResult, TabId, WindowId};
 
 /// Run the CLI binary with the given arguments, asserting success.
 async fn run_cli(h: &Harness, args: &[&str]) -> String {
@@ -65,63 +66,39 @@ async fn run_cli_expect_failure(h: &Harness, args: &[&str]) {
 }
 
 /// Get the first window ID.
-#[expect(clippy::panic, reason = "test helper")]
-async fn first_window_id(h: &Harness) -> u32 {
-    let result = h
-        .send_command(CliCommand::ListWindows)
+async fn first_window_id(h: &Harness) -> WindowId {
+    let windows = h
+        .client()
+        .list_windows()
         .await
         .expect("ListWindows should succeed");
-    match result {
-        CliResult::Windows { windows } => {
-            assert!(!windows.is_empty(), "need at least 1 window");
-            windows.first().expect("just asserted non-empty").id
-        }
-        other => panic!("expected Windows, got {other:?}"),
-    }
+    assert!(!windows.is_empty(), "need at least 1 window");
+    windows.first().expect("just asserted non-empty").id
 }
 
 /// Open a test tab (about:blank) and return its ID.
-#[expect(clippy::panic, reason = "test helper")]
-async fn open_blank_tab(h: &Harness, window_id: u32) -> u32 {
-    let result = h
-        .send_command(CliCommand::OpenTab {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some("about:blank".to_owned()),
-            username: None,
-            password: None,
-            background: false,
-            cookie_store_id: None,
-        })
+async fn open_blank_tab(h: &Harness, window_id: WindowId) -> TabId {
+    let mut params = OpenTabParams::new(window_id);
+    params.url = Some("about:blank".to_owned());
+    let tab = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab should succeed");
-    match result {
-        CliResult::Tab(d) => d.id,
-        other => panic!("expected Tab, got {other:?}"),
-    }
+    tab.id
 }
 
 /// Open a test tab navigated to a URL and return its ID.
-#[expect(clippy::panic, reason = "test helper")]
-async fn open_url_tab(h: &Harness, window_id: u32, url: &str) -> u32 {
-    let result = h
-        .send_command(CliCommand::OpenTab {
-            window_id,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some(url.to_owned()),
-            username: None,
-            password: None,
-            background: true,
-            cookie_store_id: None,
-        })
+async fn open_url_tab(h: &Harness, window_id: WindowId, url: &str) -> TabId {
+    let mut params = OpenTabParams::new(window_id);
+    params.url = Some(url.to_owned());
+    params.background = true;
+    let tab = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab should succeed");
-    match result {
-        CliResult::Tab(d) => d.id,
-        other => panic!("expected Tab, got {other:?}"),
-    }
+    tab.id
 }
 
 // --- --tab-id ---
@@ -139,9 +116,7 @@ async fn match_by_tab_id_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -184,9 +159,7 @@ async fn match_by_tab_title_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -232,9 +205,7 @@ async fn match_by_tab_title_regex_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -274,9 +245,7 @@ async fn match_by_tab_url_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -323,9 +292,7 @@ async fn match_by_tab_url_domain_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -371,9 +338,7 @@ async fn match_by_tab_url_regex_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -451,12 +416,8 @@ async fn match_by_tab_active_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id: tab2 })
-        .await
-        .expect("cleanup");
-    h.send_command(CliCommand::CloseTab { tab_id: _tab1 })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab2).await.expect("cleanup");
+    h.client().close_tab(_tab1).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -476,7 +437,6 @@ async fn match_by_tab_active_chrome() {
 
 // --- --tab-not-active (use mute to verify subset) ---
 
-#[expect(clippy::panic, reason = "test assertions")]
 async fn match_by_tab_not_active_body(h: &Harness) {
     let wid = first_window_id(h).await;
     let tab1 = open_blank_tab(h, wid).await;
@@ -499,30 +459,16 @@ async fn match_by_tab_not_active_body(h: &Harness) {
     .await;
 
     // Verify: tab1 should be muted (not active), tab2 should NOT be muted (active)
-    let result = h
-        .send_command(CliCommand::ListTabs { window_id: wid })
-        .await
-        .expect("ListTabs");
-    match result {
-        CliResult::Tabs { tabs } => {
-            let t1 = tabs.iter().find(|t| t.id == tab1).expect("tab1 exists");
-            let t2 = tabs.iter().find(|t| t.id == tab2).expect("tab2 exists");
-            assert!(t1.is_muted, "tab1 (not-active) should be muted");
-            assert!(!t2.is_muted, "tab2 (active) should NOT be muted");
-        }
-        other => panic!("expected Tabs, got {other:?}"),
-    }
+    let tabs = h.client().list_tabs(wid).await.expect("ListTabs");
+    let t1 = tabs.iter().find(|t| t.id == tab1).expect("tab1 exists");
+    let t2 = tabs.iter().find(|t| t.id == tab2).expect("tab2 exists");
+    assert!(t1.is_muted, "tab1 (not-active) should be muted");
+    assert!(!t2.is_muted, "tab2 (active) should NOT be muted");
 
     // Cleanup: unmute and close
-    h.send_command(CliCommand::UnmuteTab { tab_id: tab1 })
-        .await
-        .expect("unmute");
-    h.send_command(CliCommand::CloseTab { tab_id: tab2 })
-        .await
-        .expect("cleanup");
-    h.send_command(CliCommand::CloseTab { tab_id: tab1 })
-        .await
-        .expect("cleanup");
+    h.client().unmute_tab(tab1).await.expect("unmute");
+    h.client().close_tab(tab2).await.expect("cleanup");
+    h.client().close_tab(tab1).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -546,9 +492,7 @@ async fn match_by_tab_not_active_chrome() {
 async fn match_by_tab_pinned_body(h: &Harness) {
     let wid = first_window_id(h).await;
     let tab_id = open_blank_tab(h, wid).await;
-    h.send_command(CliCommand::PinTab { tab_id })
-        .await
-        .expect("pin");
+    h.client().pin_tab(tab_id).await.expect("pin");
     let w = wid.to_string();
 
     let stdout = run_cli(
@@ -562,12 +506,8 @@ async fn match_by_tab_pinned_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::UnpinTab { tab_id })
-        .await
-        .expect("unpin");
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().unpin_tab(tab_id).await.expect("unpin");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -587,14 +527,11 @@ async fn match_by_tab_pinned_chrome() {
 
 // --- --tab-not-pinned ---
 
-#[expect(clippy::panic, reason = "test assertions")]
 async fn match_by_tab_not_pinned_body(h: &Harness) {
     let wid = first_window_id(h).await;
     let tab1 = open_blank_tab(h, wid).await;
     let tab2 = open_blank_tab(h, wid).await;
-    h.send_command(CliCommand::PinTab { tab_id: tab1 })
-        .await
-        .expect("pin");
+    h.client().pin_tab(tab1).await.expect("pin");
     let w = wid.to_string();
 
     // Mute all unpinned tabs
@@ -613,32 +550,16 @@ async fn match_by_tab_not_pinned_body(h: &Harness) {
     .await;
 
     // Verify tab2 (unpinned) got muted, tab1 (pinned) did not
-    let result = h
-        .send_command(CliCommand::ListTabs { window_id: wid })
-        .await
-        .expect("ListTabs");
-    match result {
-        CliResult::Tabs { tabs } => {
-            let t1 = tabs.iter().find(|t| t.id == tab1).expect("tab1");
-            let t2 = tabs.iter().find(|t| t.id == tab2).expect("tab2");
-            assert!(!t1.is_muted, "pinned tab should NOT be muted");
-            assert!(t2.is_muted, "unpinned tab should be muted");
-        }
-        other => panic!("expected Tabs, got {other:?}"),
-    }
+    let tabs = h.client().list_tabs(wid).await.expect("ListTabs");
+    let t1 = tabs.iter().find(|t| t.id == tab1).expect("tab1");
+    let t2 = tabs.iter().find(|t| t.id == tab2).expect("tab2");
+    assert!(!t1.is_muted, "pinned tab should NOT be muted");
+    assert!(t2.is_muted, "unpinned tab should be muted");
 
-    h.send_command(CliCommand::UnmuteTab { tab_id: tab2 })
-        .await
-        .expect("unmute");
-    h.send_command(CliCommand::UnpinTab { tab_id: tab1 })
-        .await
-        .expect("unpin");
-    h.send_command(CliCommand::CloseTab { tab_id: tab2 })
-        .await
-        .expect("cleanup");
-    h.send_command(CliCommand::CloseTab { tab_id: tab1 })
-        .await
-        .expect("cleanup");
+    h.client().unmute_tab(tab2).await.expect("unmute");
+    h.client().unpin_tab(tab1).await.expect("unpin");
+    h.client().close_tab(tab2).await.expect("cleanup");
+    h.client().close_tab(tab1).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -662,9 +583,7 @@ async fn match_by_tab_not_pinned_chrome() {
 async fn match_by_tab_muted_body(h: &Harness) {
     let wid = first_window_id(h).await;
     let tab_id = open_blank_tab(h, wid).await;
-    h.send_command(CliCommand::MuteTab { tab_id })
-        .await
-        .expect("mute");
+    h.client().mute_tab(tab_id).await.expect("mute");
     let w = wid.to_string();
 
     let stdout = run_cli(
@@ -678,12 +597,8 @@ async fn match_by_tab_muted_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::UnmuteTab { tab_id })
-        .await
-        .expect("unmute");
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().unmute_tab(tab_id).await.expect("unmute");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -708,9 +623,7 @@ async fn match_by_tab_not_muted_body(h: &Harness) {
     let wid = first_window_id(h).await;
     let tab1 = open_blank_tab(h, wid).await;
     let tab2 = open_blank_tab(h, wid).await;
-    h.send_command(CliCommand::MuteTab { tab_id: tab1 })
-        .await
-        .expect("mute");
+    h.client().mute_tab(tab1).await.expect("mute");
     let t2 = tab2.to_string();
 
     // Activate the non-muted tab by matching --tab-not-muted and --tab-id
@@ -724,15 +637,9 @@ async fn match_by_tab_not_muted_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::UnmuteTab { tab_id: tab1 })
-        .await
-        .expect("unmute");
-    h.send_command(CliCommand::CloseTab { tab_id: tab2 })
-        .await
-        .expect("cleanup");
-    h.send_command(CliCommand::CloseTab { tab_id: tab1 })
-        .await
-        .expect("cleanup");
+    h.client().unmute_tab(tab1).await.expect("unmute");
+    h.client().close_tab(tab2).await.expect("cleanup");
+    h.client().close_tab(tab1).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -762,7 +669,8 @@ async fn match_by_tab_discarded_body(h: &Harness) {
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // Discard the tab
-    h.send_command(CliCommand::DiscardTab { tab_id })
+    h.client()
+        .discard_tab(tab_id)
         .await
         .expect("DiscardTab should succeed");
 
@@ -780,9 +688,7 @@ async fn match_by_tab_discarded_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -810,9 +716,7 @@ async fn match_by_tab_not_discarded_body(h: &Harness) {
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // Discard tab1 (it's not active)
-    h.send_command(CliCommand::DiscardTab { tab_id: tab1 })
-        .await
-        .expect("DiscardTab");
+    h.client().discard_tab(tab1).await.expect("DiscardTab");
 
     // Activate a non-discarded tab by matching --tab-not-discarded + --tab-id
     let t2 = tab2.to_string();
@@ -830,12 +734,8 @@ async fn match_by_tab_not_discarded_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id: tab2 })
-        .await
-        .expect("cleanup");
-    h.send_command(CliCommand::CloseTab { tab_id: tab1 })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab2).await.expect("cleanup");
+    h.client().close_tab(tab1).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -876,9 +776,7 @@ async fn match_by_tab_audible_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -921,12 +819,8 @@ async fn match_by_tab_not_audible_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id: silent_tab })
-        .await
-        .expect("cleanup");
-    h.send_command(CliCommand::CloseTab { tab_id: audio_tab })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(silent_tab).await.expect("cleanup");
+    h.client().close_tab(audio_tab).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -963,9 +857,7 @@ async fn match_by_tab_not_incognito_body(h: &Harness) {
     )
     .await;
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -984,7 +876,7 @@ async fn match_by_tab_not_incognito_chrome() {
 }
 
 /// Test --tab-in-reader-mode: open a known reader-compatible page, toggle reader mode.
-/// Firefox-only — Chrome doesn't support Reader Mode.
+/// Firefox-only -- Chrome doesn't support Reader Mode.
 /// Uses a real website because Firefox's readability algorithm is strict about
 /// content structure and local test server pages may not qualify.
 #[expect(clippy::panic, reason = "test assertions")]
@@ -992,29 +884,21 @@ async fn match_by_tab_in_reader_mode_body(h: &Harness) {
     let wid = first_window_id(h).await;
     // Use a real article URL that Firefox is known to consider reader-compatible
     let server = test_server::Server::start_plain();
-    // Open as active tab — Firefox only analyzes active tabs for readability
-    let result = h
-        .send_command(CliCommand::OpenTab {
-            window_id: wid,
-            insert_before_tab_id: None,
-            insert_after_tab_id: None,
-            url: Some(server.article_url()),
-            username: None,
-            password: None,
-            background: false,
-            cookie_store_id: None,
-        })
+    // Open as active tab -- Firefox only analyzes active tabs for readability
+    let mut params = OpenTabParams::new(wid);
+    params.url = Some(server.article_url());
+    let tab = h
+        .client()
+        .open_tab(params)
         .await
         .expect("OpenTab should succeed");
-    let tab_id = match result {
-        CliResult::Tab(d) => d.id,
-        other => panic!("expected Tab, got {other:?}"),
-    };
+    let tab_id = tab.id;
     // Wait for the page to fully load so Firefox analyzes it for readability
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
     // Toggle reader mode on
-    h.send_command(CliCommand::ToggleReaderMode { tab_id })
+    h.client()
+        .toggle_reader_mode(tab_id)
         .await
         .expect("ToggleReaderMode should succeed");
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -1041,14 +925,13 @@ async fn match_by_tab_in_reader_mode_body(h: &Harness) {
     }
 
     // Toggle reader mode off before closing
-    h.send_command(CliCommand::ToggleReaderMode { tab_id })
+    h.client()
+        .toggle_reader_mode(tab_id)
         .await
         .expect("ToggleReaderMode off should succeed");
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -1077,9 +960,7 @@ async fn match_by_tab_not_in_reader_mode_body(h: &Harness) {
     )
     .await;
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -1106,7 +987,7 @@ async fn match_by_tab_awaiting_auth_body(h: &Harness) {
     let server = test_server::Server::start_with_auth("user", "pass");
     let wid = first_window_id(h).await;
 
-    // Open tab to auth endpoint WITHOUT credentials — triggers 401 prompt
+    // Open tab to auth endpoint WITHOUT credentials -- triggers 401 prompt
     let tab_id = open_url_tab(h, wid, &server.auth_url()).await;
     // Give the browser time to fire the auth challenge
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -1131,9 +1012,7 @@ async fn match_by_tab_awaiting_auth_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -1171,9 +1050,7 @@ async fn match_by_tab_not_awaiting_auth_body(h: &Harness) {
     )
     .await;
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -1219,9 +1096,7 @@ async fn match_by_tab_status_complete_body(h: &Harness) {
         other => panic!("expected Tab, got {other:?}"),
     }
 
-    h.send_command(CliCommand::CloseTab { tab_id })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -1261,12 +1136,8 @@ async fn match_tab_multiple_abort_body(h: &Harness) {
     )
     .await;
 
-    h.send_command(CliCommand::CloseTab { tab_id: tab2 })
-        .await
-        .expect("cleanup");
-    h.send_command(CliCommand::CloseTab { tab_id: tab1 })
-        .await
-        .expect("cleanup");
+    h.client().close_tab(tab2).await.expect("cleanup");
+    h.client().close_tab(tab1).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -1286,7 +1157,6 @@ async fn match_tab_multiple_abort_chrome() {
 
 // --- --if-matches-multiple all (tabs) ---
 
-#[expect(clippy::panic, reason = "test assertions")]
 async fn match_tab_multiple_all_body(h: &Harness) {
     let wid = first_window_id(h).await;
     let tab1 = open_blank_tab(h, wid).await;
@@ -1310,33 +1180,17 @@ async fn match_tab_multiple_all_body(h: &Harness) {
     .await;
 
     // Verify all test tabs are muted
-    let result = h
-        .send_command(CliCommand::ListTabs { window_id: wid })
-        .await
-        .expect("ListTabs");
-    match result {
-        CliResult::Tabs { tabs } => {
-            let t1 = tabs.iter().find(|t| t.id == tab1).expect("tab1");
-            let t2 = tabs.iter().find(|t| t.id == tab2).expect("tab2");
-            assert!(t1.is_muted, "tab1 should be muted");
-            assert!(t2.is_muted, "tab2 should be muted");
-        }
-        other => panic!("expected Tabs, got {other:?}"),
-    }
+    let tabs = h.client().list_tabs(wid).await.expect("ListTabs");
+    let t1 = tabs.iter().find(|t| t.id == tab1).expect("tab1");
+    let t2 = tabs.iter().find(|t| t.id == tab2).expect("tab2");
+    assert!(t1.is_muted, "tab1 should be muted");
+    assert!(t2.is_muted, "tab2 should be muted");
 
     // Cleanup
-    h.send_command(CliCommand::UnmuteTab { tab_id: tab1 })
-        .await
-        .expect("unmute");
-    h.send_command(CliCommand::UnmuteTab { tab_id: tab2 })
-        .await
-        .expect("unmute");
-    h.send_command(CliCommand::CloseTab { tab_id: tab2 })
-        .await
-        .expect("cleanup");
-    h.send_command(CliCommand::CloseTab { tab_id: tab1 })
-        .await
-        .expect("cleanup");
+    h.client().unmute_tab(tab1).await.expect("unmute");
+    h.client().unmute_tab(tab2).await.expect("unmute");
+    h.client().close_tab(tab2).await.expect("cleanup");
+    h.client().close_tab(tab1).await.expect("cleanup");
 }
 
 #[tokio::test]

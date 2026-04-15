@@ -6,6 +6,122 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Browser-assigned window identifier.
+///
+/// A lightweight newtype around `u32` that prevents accidental misuse of
+/// tab or download IDs where a window ID is expected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WindowId(pub u32);
+
+impl std::fmt::Display for WindowId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::str::FromStr for WindowId {
+    type Err = std::num::ParseIntError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<u32>().map(Self)
+    }
+}
+
+/// Browser-assigned tab identifier.
+///
+/// A lightweight newtype around `u32` that prevents accidental misuse of
+/// window or download IDs where a tab ID is expected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TabId(pub u32);
+
+impl std::fmt::Display for TabId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::str::FromStr for TabId {
+    type Err = std::num::ParseIntError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<u32>().map(Self)
+    }
+}
+
+/// Browser-assigned download identifier.
+///
+/// A lightweight newtype around `u32` that prevents accidental misuse of
+/// window or tab IDs where a download ID is expected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DownloadId(pub u32);
+
+impl std::fmt::Display for DownloadId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::str::FromStr for DownloadId {
+    type Err = std::num::ParseIntError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<u32>().map(Self)
+    }
+}
+
+/// Firefox container (cookie store) identifier.
+///
+/// A lightweight newtype around `String` that prevents accidental misuse of
+/// other string fields where a cookie store ID is expected.
+/// Values are typically of the form `"firefox-container-1"`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CookieStoreId(pub String);
+
+impl std::fmt::Display for CookieStoreId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::str::FromStr for CookieStoreId {
+    type Err = std::convert::Infallible;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(s.to_owned()))
+    }
+}
+
+impl AsRef<str> for CookieStoreId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Serde helper: deserializes `-1` as `None` and non-negative values as
+/// `Some(u64)`; serializes `None` back to `-1`.
+mod neg1_as_none {
+    use serde::{Deserialize as _, Deserializer, Serializer};
+
+    /// Serialize `None` as `-1` and `Some(v)` as the integer `v`.
+    #[expect(clippy::ref_option, reason = "signature required by serde(with)")]
+    pub(crate) fn serialize<S: Serializer>(value: &Option<u64>, ser: S) -> Result<S::Ok, S::Error> {
+        match *value {
+            Some(v) => ser.serialize_i64(i64::try_from(v).unwrap_or(i64::MAX)),
+            None => ser.serialize_i64(-1),
+        }
+    }
+
+    /// Deserialize a signed integer, mapping negative values to `None`.
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Option<u64>, D::Error> {
+        let v = i64::deserialize(de)?;
+        if v < 0 {
+            Ok(None)
+        } else {
+            Ok(Some(u64::try_from(v).unwrap_or(u64::MAX)))
+        }
+    }
+}
+
 /// Information about a running browser instance.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,7 +185,7 @@ pub enum WindowState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabSummary {
     /// The browser-assigned tab ID.
-    pub id: u32,
+    pub id: TabId,
     /// Zero-based position of the tab within its window.
     pub index: u32,
     /// The tab's title.
@@ -82,7 +198,7 @@ pub struct TabSummary {
     ///
     /// Firefox-specific; `None` on browsers that don't support containers.
     #[serde(default)]
-    pub cookie_store_id: Option<String>,
+    pub cookie_store_id: Option<CookieStoreId>,
     /// The human-readable container name (e.g. "Work", "Personal").
     ///
     /// Firefox-specific; `None` on browsers that don't support containers.
@@ -94,12 +210,12 @@ impl TabSummary {
     /// Create a new `TabSummary`.
     #[must_use]
     pub const fn new(
-        id: u32,
+        id: TabId,
         index: u32,
         title: String,
         url: String,
         is_active: bool,
-        cookie_store_id: Option<String>,
+        cookie_store_id: Option<CookieStoreId>,
         container_name: Option<String>,
     ) -> Self {
         Self {
@@ -119,7 +235,7 @@ impl TabSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowSummary {
     /// The window's unique identifier within the browser.
-    pub id: u32,
+    pub id: WindowId,
     /// The full window title as displayed in the title bar.
     pub title: String,
     /// An optional prefix prepended to the window title (Firefox-only, via `titlePreface`).
@@ -143,7 +259,7 @@ impl WindowSummary {
     /// Create a new `WindowSummary`.
     #[must_use]
     pub const fn new(
-        id: u32,
+        id: WindowId,
         title: String,
         title_prefix: Option<String>,
         is_focused: bool,
@@ -229,7 +345,7 @@ impl std::fmt::Display for FilenameConflictAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DownloadItem {
     /// Browser-assigned download ID.
-    pub id: u32,
+    pub id: DownloadId,
     /// The URL that was downloaded.
     pub url: String,
     /// Absolute filesystem path where the file was saved.
@@ -238,10 +354,12 @@ pub struct DownloadItem {
     pub state: DownloadState,
     /// Bytes received so far.
     pub bytes_received: u64,
-    /// Total file size in bytes, or -1 if unknown.
-    pub total_bytes: i64,
-    /// Final file size in bytes, or -1 if unknown.
-    pub file_size: i64,
+    /// Total file size in bytes, or `None` if unknown.
+    #[serde(with = "neg1_as_none")]
+    pub total_bytes: Option<u64>,
+    /// Final file size in bytes, or `None` if unknown.
+    #[serde(with = "neg1_as_none")]
+    pub file_size: Option<u64>,
     /// Error reason if the download was interrupted.
     #[serde(default)]
     pub error: Option<String>,
@@ -275,13 +393,13 @@ impl DownloadItem {
     )]
     #[must_use]
     pub const fn new(
-        id: u32,
+        id: DownloadId,
         url: String,
         filename: String,
         state: DownloadState,
         bytes_received: u64,
-        total_bytes: i64,
-        file_size: i64,
+        total_bytes: Option<u64>,
+        file_size: Option<u64>,
         error: Option<String>,
         start_time: String,
         end_time: Option<String>,
@@ -320,11 +438,11 @@ impl DownloadItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabDetails {
     /// The tab's unique identifier within the browser.
-    pub id: u32,
+    pub id: TabId,
     /// Zero-based position of the tab within its window.
     pub index: u32,
     /// The identifier of the window that contains this tab.
-    pub window_id: u32,
+    pub window_id: WindowId,
     /// The tab's title.
     pub title: String,
     /// The URL currently loaded in the tab.
@@ -392,7 +510,7 @@ pub struct TabDetails {
     ///
     /// Firefox-specific; `None` on browsers that don't support containers.
     #[serde(default)]
-    pub cookie_store_id: Option<String>,
+    pub cookie_store_id: Option<CookieStoreId>,
     /// The human-readable container name (e.g. "Work", "Personal").
     ///
     /// Firefox-specific; `None` on browsers that don't support containers.
@@ -412,9 +530,9 @@ impl TabDetails {
     )]
     #[must_use]
     pub const fn new(
-        id: u32,
+        id: TabId,
         index: u32,
-        window_id: u32,
+        window_id: WindowId,
         title: String,
         url: String,
         is_active: bool,
@@ -431,7 +549,7 @@ impl TabDetails {
         history_steps_back: Option<u32>,
         history_steps_forward: Option<u32>,
         history_hidden_count: Option<u32>,
-        cookie_store_id: Option<String>,
+        cookie_store_id: Option<CookieStoreId>,
         container_name: Option<String>,
     ) -> Self {
         Self {
@@ -465,7 +583,7 @@ impl TabDetails {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainerInfo {
     /// The cookie store ID (e.g. `"firefox-container-1"`).
-    pub cookie_store_id: String,
+    pub cookie_store_id: CookieStoreId,
     /// Human-readable name (e.g. `"Work"`).
     pub name: String,
     /// Color identifier (e.g. `"blue"`).
@@ -480,7 +598,7 @@ impl ContainerInfo {
     /// Create a new `ContainerInfo`.
     #[must_use]
     pub const fn new(
-        cookie_store_id: String,
+        cookie_store_id: CookieStoreId,
         name: String,
         color: String,
         color_code: String,
@@ -504,31 +622,31 @@ pub enum BrowserEvent {
     /// A new browser window was opened.
     WindowOpened {
         /// The new window's ID.
-        window_id: u32,
+        window_id: WindowId,
         /// The window's title at the time it was created (may be empty).
         title: String,
     },
     /// A browser window was closed.
     WindowClosed {
         /// The ID of the closed window.
-        window_id: u32,
+        window_id: WindowId,
     },
     /// The active tab in a window changed.
     TabActivated {
         /// The window containing the newly active tab.
-        window_id: u32,
+        window_id: WindowId,
         /// The ID of the newly active tab.
-        tab_id: u32,
+        tab_id: TabId,
         /// The ID of the previously active tab, if any.
         #[serde(default)]
-        previous_tab_id: Option<u32>,
+        previous_tab_id: Option<TabId>,
     },
     /// A new tab was opened.
     TabOpened {
         /// The new tab's ID.
-        tab_id: u32,
+        tab_id: TabId,
         /// The window containing the new tab.
-        window_id: u32,
+        window_id: WindowId,
         /// Zero-based position of the tab within its window.
         index: u32,
         /// The URL loaded in the tab at creation time (may be empty or `"about:blank"`).
@@ -539,43 +657,43 @@ pub enum BrowserEvent {
     /// A tab was closed.
     TabClosed {
         /// The ID of the closed tab.
-        tab_id: u32,
+        tab_id: TabId,
         /// The window that contained the tab.
-        window_id: u32,
+        window_id: WindowId,
         /// Whether the tab was closed because its parent window was also closing.
         is_window_closing: bool,
     },
     /// A tab started loading a new URL.
     TabNavigated {
         /// The ID of the navigating tab.
-        tab_id: u32,
+        tab_id: TabId,
         /// The window containing the tab.
-        window_id: u32,
+        window_id: WindowId,
         /// The new URL.
         url: String,
     },
     /// A tab's title changed.
     TabTitleChanged {
         /// The ID of the tab.
-        tab_id: u32,
+        tab_id: TabId,
         /// The window containing the tab.
-        window_id: u32,
+        window_id: WindowId,
         /// The new title.
         title: String,
     },
     /// A tab's loading status changed (e.g. from `loading` to `complete`).
     TabStatusChanged {
         /// The ID of the tab.
-        tab_id: u32,
+        tab_id: TabId,
         /// The window containing the tab.
-        window_id: u32,
+        window_id: WindowId,
         /// The new loading status.
         status: TabStatus,
     },
     /// A new download was started.
     DownloadCreated {
         /// The download's ID.
-        download_id: u32,
+        download_id: DownloadId,
         /// The URL being downloaded.
         url: String,
         /// The filename (may be empty until determined).
@@ -587,7 +705,7 @@ pub enum BrowserEvent {
     /// A download's state or properties changed.
     DownloadChanged {
         /// The download's ID.
-        download_id: u32,
+        download_id: DownloadId,
         /// The new state, if it changed.
         #[serde(default)]
         state: Option<DownloadState>,
@@ -601,7 +719,7 @@ pub enum BrowserEvent {
     /// A download was removed from the browser's history.
     DownloadErased {
         /// The download's ID.
-        download_id: u32,
+        download_id: DownloadId,
     },
 }
 
@@ -631,33 +749,33 @@ pub enum CliCommand {
     /// Close an existing browser window.
     CloseWindow {
         /// The ID of the window to close.
-        window_id: u32,
+        window_id: WindowId,
     },
     /// Set the title prefix (Firefox `titlePreface`) for a window.
     SetWindowTitlePrefix {
         /// The ID of the window whose prefix to set.
-        window_id: u32,
+        window_id: WindowId,
         /// The prefix string to prepend to the window title.
         prefix: String,
     },
     /// Remove the title prefix from a window, restoring the default title.
     RemoveWindowTitlePrefix {
         /// The ID of the window whose prefix to remove.
-        window_id: u32,
+        window_id: WindowId,
     },
     /// List all tabs in a window with full details.
     ListTabs {
         /// The ID of the window whose tabs to list.
-        window_id: u32,
+        window_id: WindowId,
     },
     /// Open a new tab in a window.
     OpenTab {
         /// The ID of the window in which to open the tab.
-        window_id: u32,
+        window_id: WindowId,
         /// If set, the new tab will be inserted immediately before the tab with this ID.
-        insert_before_tab_id: Option<u32>,
+        insert_before_tab_id: Option<TabId>,
         /// If set, the new tab will be inserted immediately after the tab with this ID.
-        insert_after_tab_id: Option<u32>,
+        insert_after_tab_id: Option<TabId>,
         /// The URL to load in the new tab, or the browser's default new-tab page if absent.
         url: Option<String>,
         /// Optional username for HTTP authentication.
@@ -682,24 +800,24 @@ pub enum CliCommand {
         ///
         /// E.g. `"firefox-container-1"`. Ignored on browsers without container support.
         #[serde(default)]
-        cookie_store_id: Option<String>,
+        cookie_store_id: Option<CookieStoreId>,
     },
     /// Activate a tab, making it the focused tab in its window.
     ActivateTab {
         /// The ID of the tab to activate.
-        tab_id: u32,
+        tab_id: TabId,
     },
     /// Navigate an existing tab to a new URL.
     NavigateTab {
         /// The ID of the tab to navigate.
-        tab_id: u32,
+        tab_id: TabId,
         /// The URL to load in the tab.
         url: String,
     },
     /// Reload a tab.
     ReloadTab {
         /// The ID of the tab to reload.
-        tab_id: u32,
+        tab_id: TabId,
         /// If `true`, bypass the browser cache (hard refresh).
         #[serde(default)]
         bypass_cache: bool,
@@ -707,17 +825,17 @@ pub enum CliCommand {
     /// Close a tab.
     CloseTab {
         /// The ID of the tab to close.
-        tab_id: u32,
+        tab_id: TabId,
     },
     /// Pin a tab.
     PinTab {
         /// The ID of the tab to pin.
-        tab_id: u32,
+        tab_id: TabId,
     },
     /// Unpin a tab.
     UnpinTab {
         /// The ID of the tab to unpin.
-        tab_id: u32,
+        tab_id: TabId,
     },
     /// Toggle Reader Mode for a tab.
     ///
@@ -725,7 +843,7 @@ pub enum CliCommand {
     /// must be displaying a page that Firefox considers reader-mode compatible.
     ToggleReaderMode {
         /// The ID of the tab whose Reader Mode to toggle.
-        tab_id: u32,
+        tab_id: TabId,
     },
     /// Discard a tab, unloading its content from memory without closing it.
     ///
@@ -733,27 +851,27 @@ pub enum CliCommand {
     /// reloaded when activated. Cannot discard the active tab.
     DiscardTab {
         /// The ID of the tab to discard.
-        tab_id: u32,
+        tab_id: TabId,
     },
     /// Warm up a discarded tab, loading its content into memory without activating it.
     WarmupTab {
         /// The ID of the tab to warm up.
-        tab_id: u32,
+        tab_id: TabId,
     },
     /// Mute a tab, suppressing any audio it produces.
     MuteTab {
         /// The ID of the tab to mute.
-        tab_id: u32,
+        tab_id: TabId,
     },
     /// Unmute a tab, allowing it to produce audio again.
     UnmuteTab {
         /// The ID of the tab to unmute.
-        tab_id: u32,
+        tab_id: TabId,
     },
     /// Move a tab to a new position within its window.
     MoveTab {
         /// The ID of the tab to move.
-        tab_id: u32,
+        tab_id: TabId,
         /// The new zero-based index for the tab within its window.
         new_index: u32,
     },
@@ -763,7 +881,7 @@ pub enum CliCommand {
     /// or the current tab state if the history boundary was already reached.
     GoBack {
         /// The ID of the tab to navigate.
-        tab_id: u32,
+        tab_id: TabId,
         /// Number of steps to go back (default 1).
         steps: u32,
     },
@@ -773,7 +891,7 @@ pub enum CliCommand {
     /// or the current tab state if the history boundary was already reached.
     GoForward {
         /// The ID of the tab to navigate.
-        tab_id: u32,
+        tab_id: TabId,
         /// Number of steps to go forward (default 1).
         steps: u32,
     },
@@ -793,9 +911,9 @@ pub enum CliCommand {
     /// container with the same URL.
     ReopenTabInContainer {
         /// The ID of the tab to reopen.
-        tab_id: u32,
+        tab_id: TabId,
         /// The target container's cookie store ID.
-        cookie_store_id: String,
+        cookie_store_id: CookieStoreId,
     },
     /// List downloads, optionally filtered by state.
     ListDownloads {
@@ -826,27 +944,27 @@ pub enum CliCommand {
     /// Cancel an active download.
     CancelDownload {
         /// The download ID to cancel.
-        download_id: u32,
+        download_id: DownloadId,
     },
     /// Pause an active download.
     PauseDownload {
         /// The download ID to pause.
-        download_id: u32,
+        download_id: DownloadId,
     },
     /// Resume a paused download.
     ResumeDownload {
         /// The download ID to resume.
-        download_id: u32,
+        download_id: DownloadId,
     },
     /// Retry an interrupted download by re-downloading from the same URL.
     RetryDownload {
         /// The download ID to retry.
-        download_id: u32,
+        download_id: DownloadId,
     },
     /// Remove a download from the browser's download history (the file stays on disk).
     EraseDownload {
         /// The download ID to erase.
-        download_id: u32,
+        download_id: DownloadId,
     },
     /// Clear all downloads from the browser's history, optionally filtered by state.
     EraseAllDownloads {
@@ -896,7 +1014,7 @@ pub enum CliResult {
     /// ID of a newly created window returned by `OpenWindow`.
     WindowId {
         /// The new window's ID.
-        window_id: u32,
+        window_id: WindowId,
     },
     /// Detailed tab list returned by `ListTabs`.
     Tabs {
@@ -918,7 +1036,7 @@ pub enum CliResult {
     /// ID of a newly started download returned by `StartDownload`.
     DownloadId {
         /// The new download's ID.
-        download_id: u32,
+        download_id: DownloadId,
     },
     /// Returned by commands that have no meaningful output.
     Unit,
