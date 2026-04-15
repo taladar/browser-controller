@@ -2,8 +2,42 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::Error;
 use crate::matchers::BrowserKind;
+
+/// Errors that can occur during manifest installation.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum ManifestError {
+    /// The user's home directory could not be determined.
+    #[error("could not determine home directory for manifest installation")]
+    NoBrowserHome,
+    /// No mediator binary path was given and none could be found automatically.
+    #[error("mediator binary not found next to this executable; use a specific path")]
+    MediatorNotFound,
+    /// Failed to determine the path of the current executable.
+    #[error("failed to determine current executable path: {0}")]
+    CurrentExe(std::io::Error),
+    /// Failed to create the manifest directory.
+    #[error("failed to create manifest directory: {0}")]
+    CreateDir(std::io::Error),
+    /// Failed to serialize the manifest JSON.
+    #[error("failed to serialize manifest JSON: {0}")]
+    Serialize(serde_json::Error),
+    /// Failed to write the manifest file.
+    #[error("failed to write manifest file: {0}")]
+    WriteManifest(std::io::Error),
+    /// `extension_id` is required for Chromium-family browsers but was not supplied.
+    #[error(
+        "Chromium-family browsers require an extension ID; \
+         find the ID on chrome://extensions after loading the unpacked extension \
+         (a 32-character lowercase letter string)"
+    )]
+    ChromiumExtensionIdRequired,
+    /// Failed to create or write the Windows registry key.
+    #[cfg(target_os = "windows")]
+    #[error("failed to set Windows registry key: {0}")]
+    Registry(std::io::Error),
+}
 
 /// The native messaging protocol family, which determines the JSON manifest format.
 #[non_exhaustive]
@@ -166,25 +200,25 @@ pub fn install_manifest(
     browser: BrowserKind,
     mediator_path: Option<PathBuf>,
     extension_id: Option<String>,
-) -> Result<InstallManifestResult, Error> {
-    let base = directories::BaseDirs::new().ok_or(Error::NoBrowserHome)?;
+) -> Result<InstallManifestResult, ManifestError> {
+    let base = directories::BaseDirs::new().ok_or(ManifestError::NoBrowserHome)?;
 
     let mediator_path = match mediator_path {
         Some(p) => p,
         None => {
-            let exe = std::env::current_exe()?;
+            let exe = std::env::current_exe().map_err(ManifestError::CurrentExe)?;
             let candidate = exe
                 .parent()
                 .map(|dir| dir.join("browser-controller-mediator"));
             match candidate {
                 Some(p) if p.exists() => p,
-                _ => return Err(Error::MediatorNotFound),
+                _ => return Err(ManifestError::MediatorNotFound),
             }
         }
     };
 
     let manifest_dir = browser.manifest_dir(&base);
-    fs_err::create_dir_all(&manifest_dir).map_err(Error::Io)?;
+    fs_err::create_dir_all(&manifest_dir).map_err(ManifestError::CreateDir)?;
     let manifest_path = manifest_dir.join("browser_controller.json");
 
     let json = match browser.family() {
@@ -196,10 +230,10 @@ pub fn install_manifest(
                 kind: "stdio",
                 allowed_extensions: &["browser-controller@taladar.net"],
             };
-            serde_json::to_string_pretty(&manifest)?
+            serde_json::to_string_pretty(&manifest).map_err(ManifestError::Serialize)?
         }
         BrowserFamily::Chromium => {
-            let id = extension_id.ok_or(Error::ChromiumExtensionIdRequired)?;
+            let id = extension_id.ok_or(ManifestError::ChromiumExtensionIdRequired)?;
             let origin = format!("chrome-extension://{id}/");
             let manifest = ChromiumManifest {
                 name: "browser_controller",
@@ -208,11 +242,11 @@ pub fn install_manifest(
                 kind: "stdio",
                 allowed_origins: &[origin],
             };
-            serde_json::to_string_pretty(&manifest)?
+            serde_json::to_string_pretty(&manifest).map_err(ManifestError::Serialize)?
         }
     };
 
-    fs_err::write(&manifest_path, json.as_bytes()).map_err(Error::Io)?;
+    fs_err::write(&manifest_path, json.as_bytes()).map_err(ManifestError::WriteManifest)?;
 
     #[cfg(target_os = "windows")]
     {
@@ -221,9 +255,9 @@ pub fn install_manifest(
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let (key, _) = hkcu
             .create_subkey(browser.windows_registry_key())
-            .map_err(|e| Error::Io(e.into()))?;
+            .map_err(|e| ManifestError::Registry(e.into()))?;
         key.set_value("", &manifest_path.to_string_lossy().as_ref())
-            .map_err(|e| Error::Io(e.into()))?;
+            .map_err(|e| ManifestError::Registry(e.into()))?;
     }
 
     Ok(InstallManifestResult {

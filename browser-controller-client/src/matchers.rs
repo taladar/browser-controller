@@ -14,8 +14,58 @@ use browser_controller_types::{
 use derive_builder::Builder;
 use regex::Regex;
 
-use crate::Error;
 use crate::discovery::DiscoveredInstance;
+
+/// Errors that can occur when matching windows, tabs, or instances.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum MatchError {
+    /// A regular expression pattern could not be compiled.
+    #[error("invalid regex: {0}")]
+    InvalidRegex(#[from] regex::Error),
+    /// No window matched the given criteria.
+    #[error("no window matched: {criteria}")]
+    NoMatchingWindow {
+        /// Description of the criteria that were used.
+        criteria: String,
+    },
+    /// More than one window matched the criteria and the policy is abort.
+    #[error("{count} windows matched: {criteria}")]
+    AmbiguousWindow {
+        /// Number of windows that matched.
+        count: usize,
+        /// Description of the criteria that were used.
+        criteria: String,
+    },
+    /// No tab matched the given criteria.
+    #[error("no tab matched: {criteria}")]
+    NoMatchingTab {
+        /// Description of the criteria that were used.
+        criteria: String,
+    },
+    /// More than one tab matched the criteria and the policy is abort.
+    #[error("{count} tabs matched: {criteria}")]
+    AmbiguousTab {
+        /// Number of tabs that matched.
+        count: usize,
+        /// Description of the criteria that were used.
+        criteria: String,
+    },
+    /// No instance matched the given criteria.
+    #[error("no instance matched: {criteria}")]
+    NoMatchingInstance {
+        /// Description of the criteria that were used.
+        criteria: String,
+    },
+    /// More than one instance matched the criteria and the policy is abort.
+    #[error("{count} instances matched: {criteria}")]
+    AmbiguousInstance {
+        /// Number of instances that matched.
+        count: usize,
+        /// Description of the criteria that were used.
+        criteria: String,
+    },
+}
 
 // ---------------------------------------------------------------------------
 // BooleanCondition
@@ -161,7 +211,7 @@ pub trait MatchWith<'a, M> {
     /// # Errors
     ///
     /// Returns an error if a regex pattern in the matcher cannot be compiled.
-    fn match_with(self, matcher: &M) -> Result<Vec<&'a Self::Item>, Error>;
+    fn match_with(self, matcher: &M) -> Result<Vec<&'a Self::Item>, MatchError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +292,7 @@ where
 {
     type Item = WindowSummary;
 
-    fn match_with(self, matcher: &WindowMatcher) -> Result<Vec<&'a WindowSummary>, Error> {
+    fn match_with(self, matcher: &WindowMatcher) -> Result<Vec<&'a WindowSummary>, MatchError> {
         let title_regex = matcher
             .window_title_regex
             .as_deref()
@@ -409,7 +459,7 @@ where
 {
     type Item = TabDetails;
 
-    fn match_with(self, matcher: &TabMatcher) -> Result<Vec<&'a TabDetails>, Error> {
+    fn match_with(self, matcher: &TabMatcher) -> Result<Vec<&'a TabDetails>, MatchError> {
         let title_regex = matcher
             .tab_title_regex
             .as_deref()
@@ -607,7 +657,10 @@ where
 {
     type Item = DiscoveredInstance;
 
-    fn match_with(self, matcher: &InstanceMatcher) -> Result<Vec<&'a DiscoveredInstance>, Error> {
+    fn match_with(
+        self,
+        matcher: &InstanceMatcher,
+    ) -> Result<Vec<&'a DiscoveredInstance>, MatchError> {
         let name_regex = matcher
             .browser_name_regex
             .as_deref()

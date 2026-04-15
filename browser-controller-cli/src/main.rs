@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use browser_controller_client::{
     BooleanCondition, CliResult, Client, CookieStoreId, DiscoveredInstance, DownloadId,
-    OpenTabParamsBuilder, TabId, TabStatus, WindowId, WindowState,
+    MatchWith as _, OpenTabParamsBuilder, TabId, TabStatus, WindowId, WindowState,
 };
 use tracing_subscriber::{
     EnvFilter, Layer as _, Registry, filter::LevelFilter, layer::SubscriberExt as _,
@@ -20,6 +20,26 @@ pub enum Error {
     /// An error from the client library.
     #[error("client error: {0}")]
     Client(#[from] browser_controller_client::Error),
+
+    /// An error during instance discovery.
+    #[error("discovery error: {0}")]
+    Discovery(#[from] browser_controller_client::DiscoveryError),
+
+    /// An error during manifest installation.
+    #[error("manifest error: {0}")]
+    Manifest(#[from] browser_controller_client::ManifestError),
+
+    /// An error during Firefox RDP communication.
+    #[error("RDP error: {0}")]
+    Rdp(#[from] browser_controller_client::RdpError),
+
+    /// An error on the event stream.
+    #[error("event stream error: {0}")]
+    EventStream(#[from] browser_controller_client::EventStreamError),
+
+    /// An error while matching windows, tabs, or instances.
+    #[error("match error: {0}")]
+    Match(#[from] browser_controller_client::MatchError),
 
     /// An I/O error occurred (covers both network and filesystem operations).
     #[error("I/O error: {0}")]
@@ -69,6 +89,18 @@ pub enum Error {
     /// Open-tab parameters could not be built.
     #[error("invalid open-tab params: {0}")]
     OpenTabParamsBuild(#[from] browser_controller_client::OpenTabParamsBuilderError),
+}
+
+/// Convert any [`CommandError`](browser_controller_client::CommandError) into the
+/// CLI [`Error`] by going through the client library's top-level
+/// [`Error`](browser_controller_client::Error).
+impl<E: std::error::Error + 'static> From<browser_controller_client::CommandError<E>> for Error
+where
+    browser_controller_client::Error: From<E>,
+{
+    fn from(e: browser_controller_client::CommandError<E>) -> Self {
+        Self::Client(e.into())
+    }
 }
 
 /// Browser to install the native messaging host manifest for (CLI argument type).
@@ -1519,9 +1551,27 @@ async fn do_stuff() -> Result<(), Error> {
 
     // Commands that require a browser connection.
     let instances = browser_controller_client::discover_instances().await?;
-    let dir = browser_controller_client::socket_dir()?;
-    let instance =
-        browser_controller_client::select_instance(&instances, cli.instance.as_deref(), &dir)?;
+    let matcher: browser_controller_client::InstanceMatcher = match cli.instance {
+        Some(ref s) => s.as_str().into(),
+        None => browser_controller_client::InstanceMatcher::default(),
+    };
+    let matched = instances.match_with(&matcher)?;
+    let Some(instance) = matched.first() else {
+        let dir = browser_controller_client::socket_dir()?;
+        return Err(browser_controller_client::DiscoveryError::NoInstances { dir }.into());
+    };
+    if matched.len() > 1
+        && matches!(
+            matcher.if_matches_multiple(),
+            browser_controller_client::MultipleMatchBehavior::Abort
+        )
+    {
+        return Err(browser_controller_client::MatchError::AmbiguousInstance {
+            count: matched.len(),
+            criteria: matcher.to_string(),
+        }
+        .into());
+    }
     tracing::debug!(
         browser = %instance.info.browser_name,
         pid = instance.info.pid,
@@ -1582,7 +1632,9 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 // (no matching windows exist) is already achieved.
                 let window_ids = match client.resolve_windows(&((&window).try_into()?)).await {
                     Ok(ids) => ids,
-                    Err(browser_controller_client::Error::NoMatchingWindow { .. }) => Vec::new(),
+                    Err(browser_controller_client::CommandError::Other(
+                        browser_controller_client::MatchError::NoMatchingWindow { .. },
+                    )) => Vec::new(),
                     Err(e) => return Err(e.into()),
                 };
                 for window_id in window_ids {
@@ -1730,7 +1782,9 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     .await
                 {
                     Ok(ids) => ids,
-                    Err(browser_controller_client::Error::NoMatchingTab { .. }) => Vec::new(),
+                    Err(browser_controller_client::CommandError::Other(
+                        browser_controller_client::MatchError::NoMatchingTab { .. },
+                    )) => Vec::new(),
                     Err(e) => return Err(e.into()),
                 };
                 for tab_id in tab_ids {

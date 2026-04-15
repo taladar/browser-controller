@@ -1,70 +1,66 @@
 //! Error types for the browser-controller client library.
 
-use std::path::PathBuf;
-
 use browser_controller_types::CliResult;
 
-/// Errors that can occur in the browser-controller client library.
+use crate::client::SendCommandError;
+use crate::discovery::DiscoveryError;
+use crate::event_stream::EventStreamError;
+use crate::manifest::ManifestError;
+use crate::matchers::MatchError;
+use crate::rdp::RdpError;
+
+/// Error from a [`Client`](crate::Client) method that sends a command.
+///
+/// The type parameter `E` captures method-specific errors beyond the common
+/// send/timeout/unexpected-response failures. For most simple commands `E` is
+/// [`std::convert::Infallible`]; for resolve operations it is [`MatchError`].
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum CommandError<E: std::error::Error + 'static> {
+    /// The command could not be sent or the response could not be read.
+    #[error(transparent)]
+    Send(#[from] SendCommandError),
+    /// The command timed out.
+    #[error("command timed out")]
+    Timeout,
+    /// The mediator returned an unexpected response variant.
+    #[error("unexpected response: expected {expected}, got {actual:?}")]
+    UnexpectedResponse {
+        /// The name of the expected `CliResult` variant.
+        expected: &'static str,
+        /// The actual `CliResult` that was received.
+        actual: Box<CliResult>,
+    },
+    /// A method-specific error (e.g. [`MatchError`] for resolve operations).
+    #[error(transparent)]
+    Other(E),
+}
+
+/// Top-level error type for the browser-controller client library.
+///
+/// Each module defines its own focused error enum. This type aggregates them
+/// for convenience when callers do not need fine-grained matching.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// An I/O error occurred (covers both network and filesystem operations).
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
-    /// JSON serialization or deserialization failed.
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
-
-    /// The browser command returned an error.
-    #[error("command failed: {0}")]
-    CommandFailed(String),
-
-    /// The response `request_id` did not match the sent `request_id`.
-    #[error("request_id mismatch: expected {expected}, got {received}")]
-    RequestIdMismatch {
-        /// The request ID that was sent.
-        expected: String,
-        /// The request ID that was received.
-        received: String,
-    },
-
-    /// No window matched the given criteria.
-    #[error("no window matched the criteria: {criteria}")]
-    NoMatchingWindow {
-        /// Description of the criteria that were used.
-        criteria: String,
-    },
-
-    /// More than one window matched the criteria and the policy is abort.
-    #[error(
-        "{count} windows matched the criteria: {criteria}; use MultipleMatchBehavior::All to apply to all"
-    )]
-    AmbiguousWindow {
-        /// Number of windows that matched.
-        count: usize,
-        /// Description of the criteria that were used.
-        criteria: String,
-    },
-
-    /// No tab matched the given criteria.
-    #[error("no tab matched the criteria: {criteria}")]
-    NoMatchingTab {
-        /// Description of the criteria that were used.
-        criteria: String,
-    },
-
-    /// More than one tab matched the criteria and the policy is abort.
-    #[error(
-        "{count} tabs matched the criteria: {criteria}; use MultipleMatchBehavior::All to apply to all"
-    )]
-    AmbiguousTab {
-        /// Number of tabs that matched.
-        count: usize,
-        /// Description of the criteria that were used.
-        criteria: String,
-    },
-
+    /// An error occurred while sending a command to the mediator.
+    #[error(transparent)]
+    SendCommand(#[from] SendCommandError),
+    /// An error occurred on the event stream.
+    #[error(transparent)]
+    EventStream(#[from] EventStreamError),
+    /// An error occurred during Firefox RDP communication.
+    #[error(transparent)]
+    Rdp(#[from] RdpError),
+    /// An error occurred during instance discovery or selection.
+    #[error(transparent)]
+    Discovery(#[from] DiscoveryError),
+    /// An error occurred during manifest installation.
+    #[error(transparent)]
+    Manifest(#[from] ManifestError),
+    /// An error occurred while matching windows, tabs, or instances.
+    #[error(transparent)]
+    Match(#[from] MatchError),
     /// The mediator returned a response variant that does not match the command.
     #[error("unexpected response: expected {expected}, got {actual:?}")]
     UnexpectedResponse {
@@ -73,63 +69,52 @@ pub enum Error {
         /// The actual `CliResult` that was received.
         actual: Box<CliResult>,
     },
-
-    /// A regular expression pattern could not be compiled.
-    #[error("invalid regex: {0}")]
-    InvalidRegex(#[from] regex::Error),
-
     /// A command timed out waiting for a response.
     #[error("command timed out")]
     Timeout,
-
-    /// The runtime/temp directory cannot be determined.
-    #[error("cannot determine runtime/temp directory for IPC sockets")]
-    NoRuntimeDir,
-
-    /// No running mediator instance was found.
-    #[error("no browser-controller mediator is running (no sockets in {dir})")]
-    NoInstances {
-        /// The directory that was searched.
-        dir: PathBuf,
-    },
-
-    /// Multiple instances are running and no selector was provided.
-    #[error(
-        "multiple browser instances are running; provide a selector (pid or browser-name) to choose one"
-    )]
-    MultipleInstances,
-
-    /// The specified instance selector matched no running instance.
-    #[error("no browser instance matches '{selector}'")]
-    NoMatchingInstance {
-        /// The selector that was provided.
-        selector: String,
-    },
-
-    /// The specified browser name matched more than one running instance.
-    #[error("multiple browser instances match '{selector}'; use a PID to disambiguate")]
-    AmbiguousInstance {
-        /// The selector that matched multiple instances.
-        selector: String,
-    },
-
     /// A background task panicked or was cancelled.
     #[error("background task error: {0}")]
     JoinError(#[from] tokio::task::JoinError),
+}
 
-    /// The user's home directory could not be determined.
-    #[error("could not determine home directory for manifest installation")]
-    NoBrowserHome,
+impl CommandError<std::convert::Infallible> {
+    /// Widen this infallible command error to any error type parameter.
+    ///
+    /// Since `Infallible` can never be constructed, the `Other` variant is
+    /// unreachable and this conversion is always safe.
+    #[must_use]
+    pub fn widen<E: std::error::Error + 'static>(self) -> CommandError<E> {
+        match self {
+            Self::Send(e) => CommandError::Send(e),
+            Self::Timeout => CommandError::Timeout,
+            Self::UnexpectedResponse { expected, actual } => {
+                CommandError::UnexpectedResponse { expected, actual }
+            }
+            Self::Other(infallible) => match infallible {},
+        }
+    }
+}
 
-    /// No mediator binary path was given and none could be found automatically.
-    #[error("mediator binary not found next to this executable; use a specific path")]
-    MediatorNotFound,
+/// `Infallible` trivially converts to any error (it can never be constructed).
+impl From<std::convert::Infallible> for Error {
+    fn from(e: std::convert::Infallible) -> Self {
+        match e {}
+    }
+}
 
-    /// `extension_id` is required for Chromium-family browsers but was not supplied.
-    #[error(
-        "Chromium-family browsers require an extension ID; \
-         find the ID on chrome://extensions after loading the unpacked extension \
-         (a 32-character lowercase letter string)"
-    )]
-    ChromiumExtensionIdRequired,
+/// Convert any `CommandError<E>` into the top-level `Error`.
+impl<E: std::error::Error + 'static> From<CommandError<E>> for Error
+where
+    Self: From<E>,
+{
+    fn from(e: CommandError<E>) -> Self {
+        match e {
+            CommandError::Send(e) => Self::SendCommand(e),
+            CommandError::Timeout => Self::Timeout,
+            CommandError::UnexpectedResponse { expected, actual } => {
+                Self::UnexpectedResponse { expected, actual }
+            }
+            CommandError::Other(e) => Self::from(e),
+        }
+    }
 }

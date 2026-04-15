@@ -6,7 +6,31 @@ use browser_controller_types::{BrowserEvent, CliCommand, CliRequest};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
 
-use crate::Error;
+/// Errors that can occur when working with the event stream.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum EventStreamError {
+    /// Failed to connect to the mediator socket.
+    #[error("failed to connect to mediator socket: {0}")]
+    Connect(std::io::Error),
+    /// Failed to serialize the subscribe command.
+    #[error("failed to serialize subscribe command: {0}")]
+    Serialize(serde_json::Error),
+    /// Failed to send the subscribe command.
+    #[error("failed to send subscribe command: {0}")]
+    Send(std::io::Error),
+    /// Failed to read an event from the stream.
+    #[error("failed to read event from stream: {0}")]
+    Read(std::io::Error),
+    /// Failed to parse an event JSON message.
+    #[error("failed to parse event JSON {raw:?}: {source}")]
+    ParseEvent {
+        /// The JSON parse error.
+        source: serde_json::Error,
+        /// The raw line that failed to parse.
+        raw: String,
+    },
+}
 
 /// An active event subscription connection.
 ///
@@ -36,7 +60,7 @@ impl EventStream {
         socket_path: &Path,
         include_windows_tabs: bool,
         include_downloads: bool,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, EventStreamError> {
         let request = CliRequest::new(
             uuid::Uuid::new_v4().to_string(),
             CliCommand::SubscribeEvents {
@@ -45,12 +69,17 @@ impl EventStream {
             },
         );
 
-        let stream = UnixStream::connect(socket_path).await?;
+        let stream = UnixStream::connect(socket_path)
+            .await
+            .map_err(EventStreamError::Connect)?;
         let (read_half, mut write_half) = tokio::io::split(stream);
 
-        let mut json = serde_json::to_vec(&request)?;
+        let mut json = serde_json::to_vec(&request).map_err(EventStreamError::Serialize)?;
         json.push(b'\n');
-        write_half.write_all(&json).await?;
+        write_half
+            .write_all(&json)
+            .await
+            .map_err(EventStreamError::Send)?;
 
         Ok(Self {
             reader: BufReader::new(read_half),
@@ -65,13 +94,22 @@ impl EventStream {
     /// # Errors
     ///
     /// Returns an error if reading or parsing the event fails.
-    pub async fn next_event(&mut self) -> Result<Option<BrowserEvent>, Error> {
+    pub async fn next_event(&mut self) -> Result<Option<BrowserEvent>, EventStreamError> {
         let mut line = String::new();
-        let n = self.reader.read_line(&mut line).await?;
+        let n = self
+            .reader
+            .read_line(&mut line)
+            .await
+            .map_err(EventStreamError::Read)?;
         if n == 0 {
             return Ok(None);
         }
-        let event: BrowserEvent = serde_json::from_str(line.trim_end())?;
+        let trimmed = line.trim_end().to_owned();
+        let event: BrowserEvent =
+            serde_json::from_str(&trimmed).map_err(|source| EventStreamError::ParseEvent {
+                source,
+                raw: trimmed,
+            })?;
         Ok(Some(event))
     }
 }

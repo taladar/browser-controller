@@ -7,12 +7,12 @@
 //!
 //! ```no_run
 //! use std::time::Duration;
-//! use browser_controller_client::{discover_instances, select_instance, socket_dir};
+//! use browser_controller_client::{MatchWith, discover_instances, InstanceMatcher};
 //!
 //! # async fn example() -> Result<(), browser_controller_client::Error> {
 //! let instances = discover_instances().await?;
-//! let dir = socket_dir()?;
-//! let instance = select_instance(&instances, None, &dir)?;
+//! let matched = instances.match_with(&InstanceMatcher::default())?;
+//! let instance = matched.first().expect("at least one instance");
 //! let client = instance.client(Duration::from_secs(30));
 //! let info = client.browser_info().await?;
 //! println!("Connected to {} {}", info.browser_name, info.browser_version);
@@ -38,14 +38,17 @@ mod manifest;
 mod matchers;
 mod rdp;
 
-pub use client::{Client, OpenTabParams, OpenTabParamsBuilder, OpenTabParamsBuilderError};
-pub use discovery::{DiscoveredInstance, discover_instances, select_instance, socket_dir};
-pub use error::Error;
-pub use event_stream::EventStream;
-pub use manifest::{BrowserFamily, InstallManifestResult, install_manifest};
+pub use client::{
+    Client, OpenTabParams, OpenTabParamsBuilder, OpenTabParamsBuilderError, SendCommandError,
+};
+pub use discovery::{DiscoveredInstance, DiscoveryError, discover_instances, socket_dir};
+pub use error::{CommandError, Error};
+pub use event_stream::{EventStream, EventStreamError};
+pub use manifest::{BrowserFamily, InstallManifestResult, ManifestError, install_manifest};
 pub use matchers::{
     BooleanCondition, BrowserKind, InstanceMatcher, InstanceMatcherBuilder,
-    InstanceMatcherBuilderError, MatchWith, MultipleMatchBehavior, TabMatcher, TabMatcherBuilder,
-    TabMatcherBuilderError, WindowMatcher, WindowMatcherBuilder, WindowMatcherBuilderError,
+    InstanceMatcherBuilderError, MatchError, MatchWith, MultipleMatchBehavior, TabMatcher,
+    TabMatcherBuilder, TabMatcherBuilderError, WindowMatcher, WindowMatcherBuilder,
+    WindowMatcherBuilderError,
 };
-pub use rdp::load_temporary_extension;
+pub use rdp::{RdpError, load_temporary_extension};

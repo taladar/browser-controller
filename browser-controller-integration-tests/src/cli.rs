@@ -17,6 +17,9 @@ pub enum Error {
     /// An error from the browser-controller client library.
     #[error("{0}")]
     Client(#[from] browser_controller_client::Error),
+    /// An error from the event stream.
+    #[error("{0}")]
+    EventStream(#[from] browser_controller_client::EventStreamError),
 }
 
 /// Create a [`Client`] for the given socket path with the default test timeout.
@@ -61,11 +64,14 @@ impl EventSubscription {
         self.inner
             .next_event()
             .await
-            .map_err(Error::Client)
+            .map_err(Error::EventStream)
             .and_then(|opt| {
                 opt.ok_or_else(|| {
-                    Error::Client(browser_controller_client::Error::CommandFailed(
-                        "event stream closed".to_owned(),
+                    Error::EventStream(browser_controller_client::EventStreamError::Read(
+                        std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "event stream closed",
+                        ),
                     ))
                 })
             })

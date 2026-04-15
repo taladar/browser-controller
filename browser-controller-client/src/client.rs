@@ -10,9 +10,49 @@ use browser_controller_types::{
 };
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
 
-use crate::Error;
-use crate::event_stream::EventStream;
-use crate::matchers::{MatchWith as _, MultipleMatchBehavior, TabMatcher, WindowMatcher};
+use crate::error::CommandError;
+use crate::event_stream::{EventStream, EventStreamError};
+use crate::matchers::{
+    MatchError, MatchWith as _, MultipleMatchBehavior, TabMatcher, WindowMatcher,
+};
+
+/// Error from a simple command (no method-specific failure modes).
+type CmdResult<T> = Result<T, CommandError<std::convert::Infallible>>;
+
+/// Error from a resolve operation (adds [`MatchError`]).
+type ResolveResult<T> = Result<T, CommandError<MatchError>>;
+
+/// Errors that can occur when sending a command to the mediator.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum SendCommandError {
+    /// Failed to connect to the mediator socket.
+    #[error("failed to connect to mediator socket: {0}")]
+    Connect(std::io::Error),
+    /// Failed to send the command to the mediator.
+    #[error("failed to send command to mediator: {0}")]
+    Send(std::io::Error),
+    /// Failed to read the response from the mediator.
+    #[error("failed to read response from mediator: {0}")]
+    Receive(std::io::Error),
+    /// Failed to serialize the command.
+    #[error("failed to serialize command: {0}")]
+    Serialize(serde_json::Error),
+    /// Failed to deserialize the response.
+    #[error("failed to deserialize response {raw:?}: {source}")]
+    Deserialize {
+        /// The JSON parse error.
+        source: serde_json::Error,
+        /// The raw response string that failed to parse.
+        raw: String,
+    },
+    /// The command returned an error from the browser/extension.
+    #[error("command returned an error: {0}")]
+    CommandRejected(String),
+    /// The response contained an unknown outcome variant.
+    #[error("unknown response outcome variant")]
+    UnknownOutcome,
+}
 
 /// An async client for communicating with a browser-controller mediator.
 ///
@@ -28,7 +68,7 @@ pub struct Client {
 
 /// Parameters for opening a new tab.
 ///
-/// Use [`OpenTabParamsBuilder`] to construct, then pass to [`Client::open_tab`].
+/// Use [`OpenTabParams::builder`] to construct, then pass to [`Client::open_tab`].
 #[derive(Debug, Clone, derive_builder::Builder)]
 #[builder(setter(into, strip_option))]
 pub struct OpenTabParams {
@@ -55,6 +95,18 @@ pub struct OpenTabParams {
     /// Firefox container (cookie store) ID.
     #[builder(default)]
     pub(crate) cookie_store_id: Option<CookieStoreId>,
+}
+
+impl OpenTabParams {
+    /// Create a builder for opening a tab in the given window.
+    ///
+    /// The `window_id` is required; all other fields default to `None`/`false`.
+    #[must_use]
+    pub fn builder(window_id: WindowId) -> OpenTabParamsBuilder {
+        let mut b = OpenTabParamsBuilder::default();
+        b.window_id(window_id);
+        b
+    }
 }
 
 impl Client {
@@ -86,17 +138,24 @@ impl Client {
     // ------------------------------------------------------------------
 
     /// Send a command and apply the configured timeout.
-    async fn execute(&self, command: CliCommand) -> Result<CliResult, Error> {
+    async fn execute(
+        &self,
+        command: CliCommand,
+    ) -> Result<CliResult, CommandError<std::convert::Infallible>> {
         tokio::time::timeout(self.timeout, send_command(&self.socket_path, command))
             .await
-            .map_err(|_elapsed| Error::Timeout)?
+            .map_err(|_elapsed| CommandError::Timeout)?
+            .map_err(CommandError::from)
     }
 
     /// Send a command that is expected to return [`CliResult::Unit`].
-    async fn execute_unit(&self, command: CliCommand) -> Result<(), Error> {
+    async fn execute_unit(
+        &self,
+        command: CliCommand,
+    ) -> Result<(), CommandError<std::convert::Infallible>> {
         match self.execute(command).await? {
             CliResult::Unit => Ok(()),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "Unit",
                 actual: Box::new(other),
             }),
@@ -104,10 +163,13 @@ impl Client {
     }
 
     /// Send a command that is expected to return [`CliResult::Tab`].
-    async fn execute_expect_tab(&self, command: CliCommand) -> Result<TabDetails, Error> {
+    async fn execute_expect_tab(
+        &self,
+        command: CliCommand,
+    ) -> Result<TabDetails, CommandError<std::convert::Infallible>> {
         match self.execute(command).await? {
             CliResult::Tab(details) => Ok(details),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "Tab",
                 actual: Box::new(other),
             }),
@@ -123,10 +185,10 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn browser_info(&self) -> Result<BrowserInfo, Error> {
+    pub async fn browser_info(&self) -> CmdResult<BrowserInfo> {
         match self.execute(CliCommand::GetBrowserInfo).await? {
             CliResult::BrowserInfo(info) => Ok(info),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "BrowserInfo",
                 actual: Box::new(other),
             }),
@@ -142,10 +204,10 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn list_windows(&self) -> Result<Vec<WindowSummary>, Error> {
+    pub async fn list_windows(&self) -> CmdResult<Vec<WindowSummary>> {
         match self.execute(CliCommand::ListWindows).await? {
             CliResult::Windows { windows } => Ok(windows),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "Windows",
                 actual: Box::new(other),
             }),
@@ -161,7 +223,7 @@ impl Client {
         &self,
         title_prefix: Option<String>,
         incognito: bool,
-    ) -> Result<WindowId, Error> {
+    ) -> CmdResult<WindowId> {
         match self
             .execute(CliCommand::OpenWindow {
                 title_prefix,
@@ -170,7 +232,7 @@ impl Client {
             .await?
         {
             CliResult::WindowId { window_id } => Ok(window_id),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "WindowId",
                 actual: Box::new(other),
             }),
@@ -182,7 +244,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails.
-    pub async fn close_window(&self, window_id: WindowId) -> Result<(), Error> {
+    pub async fn close_window(&self, window_id: WindowId) -> CmdResult<()> {
         self.execute_unit(CliCommand::CloseWindow { window_id })
             .await
     }
@@ -196,7 +258,7 @@ impl Client {
         &self,
         window_id: WindowId,
         prefix: String,
-    ) -> Result<(), Error> {
+    ) -> CmdResult<()> {
         self.execute_unit(CliCommand::SetWindowTitlePrefix { window_id, prefix })
             .await
     }
@@ -206,7 +268,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails.
-    pub async fn remove_window_title_prefix(&self, window_id: WindowId) -> Result<(), Error> {
+    pub async fn remove_window_title_prefix(&self, window_id: WindowId) -> CmdResult<()> {
         self.execute_unit(CliCommand::RemoveWindowTitlePrefix { window_id })
             .await
     }
@@ -220,10 +282,10 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn list_tabs(&self, window_id: WindowId) -> Result<Vec<TabDetails>, Error> {
+    pub async fn list_tabs(&self, window_id: WindowId) -> CmdResult<Vec<TabDetails>> {
         match self.execute(CliCommand::ListTabs { window_id }).await? {
             CliResult::Tabs { tabs } => Ok(tabs),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "Tabs",
                 actual: Box::new(other),
             }),
@@ -235,7 +297,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn open_tab(&self, params: OpenTabParams) -> Result<TabDetails, Error> {
+    pub async fn open_tab(&self, params: OpenTabParams) -> CmdResult<TabDetails> {
         match self
             .execute(CliCommand::OpenTab {
                 window_id: params.window_id,
@@ -250,7 +312,7 @@ impl Client {
             .await?
         {
             CliResult::Tab(details) => Ok(details),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "Tab",
                 actual: Box::new(other),
             }),
@@ -262,7 +324,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn activate_tab(&self, tab_id: TabId) -> Result<TabDetails, Error> {
+    pub async fn activate_tab(&self, tab_id: TabId) -> CmdResult<TabDetails> {
         self.execute_expect_tab(CliCommand::ActivateTab { tab_id })
             .await
     }
@@ -272,7 +334,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn navigate_tab(&self, tab_id: TabId, url: String) -> Result<TabDetails, Error> {
+    pub async fn navigate_tab(&self, tab_id: TabId, url: String) -> CmdResult<TabDetails> {
         self.execute_expect_tab(CliCommand::NavigateTab { tab_id, url })
             .await
     }
@@ -282,7 +344,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn reload_tab(&self, tab_id: TabId, bypass_cache: bool) -> Result<TabDetails, Error> {
+    pub async fn reload_tab(&self, tab_id: TabId, bypass_cache: bool) -> CmdResult<TabDetails> {
         self.execute_expect_tab(CliCommand::ReloadTab {
             tab_id,
             bypass_cache,
@@ -295,7 +357,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails.
-    pub async fn close_tab(&self, tab_id: TabId) -> Result<(), Error> {
+    pub async fn close_tab(&self, tab_id: TabId) -> CmdResult<()> {
         self.execute_unit(CliCommand::CloseTab { tab_id }).await
     }
 
@@ -304,7 +366,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn pin_tab(&self, tab_id: TabId) -> Result<TabDetails, Error> {
+    pub async fn pin_tab(&self, tab_id: TabId) -> CmdResult<TabDetails> {
         self.execute_expect_tab(CliCommand::PinTab { tab_id }).await
     }
 
@@ -313,7 +375,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn unpin_tab(&self, tab_id: TabId) -> Result<TabDetails, Error> {
+    pub async fn unpin_tab(&self, tab_id: TabId) -> CmdResult<TabDetails> {
         self.execute_expect_tab(CliCommand::UnpinTab { tab_id })
             .await
     }
@@ -323,7 +385,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails.
-    pub async fn toggle_reader_mode(&self, tab_id: TabId) -> Result<(), Error> {
+    pub async fn toggle_reader_mode(&self, tab_id: TabId) -> CmdResult<()> {
         self.execute_unit(CliCommand::ToggleReaderMode { tab_id })
             .await
     }
@@ -333,7 +395,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails.
-    pub async fn discard_tab(&self, tab_id: TabId) -> Result<(), Error> {
+    pub async fn discard_tab(&self, tab_id: TabId) -> CmdResult<()> {
         self.execute_unit(CliCommand::DiscardTab { tab_id }).await
     }
 
@@ -342,7 +404,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails.
-    pub async fn warmup_tab(&self, tab_id: TabId) -> Result<(), Error> {
+    pub async fn warmup_tab(&self, tab_id: TabId) -> CmdResult<()> {
         self.execute_unit(CliCommand::WarmupTab { tab_id }).await
     }
 
@@ -351,7 +413,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn mute_tab(&self, tab_id: TabId) -> Result<TabDetails, Error> {
+    pub async fn mute_tab(&self, tab_id: TabId) -> CmdResult<TabDetails> {
         self.execute_expect_tab(CliCommand::MuteTab { tab_id })
             .await
     }
@@ -361,7 +423,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn unmute_tab(&self, tab_id: TabId) -> Result<TabDetails, Error> {
+    pub async fn unmute_tab(&self, tab_id: TabId) -> CmdResult<TabDetails> {
         self.execute_expect_tab(CliCommand::UnmuteTab { tab_id })
             .await
     }
@@ -371,13 +433,13 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn move_tab(&self, tab_id: TabId, new_index: u32) -> Result<TabDetails, Error> {
+    pub async fn move_tab(&self, tab_id: TabId, new_index: u32) -> CmdResult<TabDetails> {
         match self
             .execute(CliCommand::MoveTab { tab_id, new_index })
             .await?
         {
             CliResult::Tab(details) => Ok(details),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "Tab",
                 actual: Box::new(other),
             }),
@@ -389,10 +451,10 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn go_back(&self, tab_id: TabId, steps: u32) -> Result<TabDetails, Error> {
+    pub async fn go_back(&self, tab_id: TabId, steps: u32) -> CmdResult<TabDetails> {
         match self.execute(CliCommand::GoBack { tab_id, steps }).await? {
             CliResult::Tab(details) => Ok(details),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "Tab",
                 actual: Box::new(other),
             }),
@@ -404,13 +466,13 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn go_forward(&self, tab_id: TabId, steps: u32) -> Result<TabDetails, Error> {
+    pub async fn go_forward(&self, tab_id: TabId, steps: u32) -> CmdResult<TabDetails> {
         match self
             .execute(CliCommand::GoForward { tab_id, steps })
             .await?
         {
             CliResult::Tab(details) => Ok(details),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "Tab",
                 actual: Box::new(other),
             }),
@@ -426,7 +488,7 @@ impl Client {
         &self,
         tab_id: TabId,
         cookie_store_id: CookieStoreId,
-    ) -> Result<TabDetails, Error> {
+    ) -> CmdResult<TabDetails> {
         match self
             .execute(CliCommand::ReopenTabInContainer {
                 tab_id,
@@ -435,7 +497,7 @@ impl Client {
             .await?
         {
             CliResult::Tab(details) => Ok(details),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "Tab",
                 actual: Box::new(other),
             }),
@@ -453,10 +515,10 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails or returns an unexpected response.
-    pub async fn list_containers(&self) -> Result<Vec<ContainerInfo>, Error> {
+    pub async fn list_containers(&self) -> CmdResult<Vec<ContainerInfo>> {
         match self.execute(CliCommand::ListContainers).await? {
             CliResult::Containers { containers } => Ok(containers),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "Containers",
                 actual: Box::new(other),
             }),
@@ -477,7 +539,7 @@ impl Client {
         state: Option<DownloadState>,
         limit: Option<u32>,
         query: Option<String>,
-    ) -> Result<Vec<DownloadItem>, Error> {
+    ) -> CmdResult<Vec<DownloadItem>> {
         match self
             .execute(CliCommand::ListDownloads {
                 state,
@@ -487,7 +549,7 @@ impl Client {
             .await?
         {
             CliResult::Downloads { downloads } => Ok(downloads),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "Downloads",
                 actual: Box::new(other),
             }),
@@ -505,7 +567,7 @@ impl Client {
         filename: Option<String>,
         save_as: bool,
         conflict_action: Option<FilenameConflictAction>,
-    ) -> Result<DownloadId, Error> {
+    ) -> CmdResult<DownloadId> {
         match self
             .execute(CliCommand::StartDownload {
                 url,
@@ -516,7 +578,7 @@ impl Client {
             .await?
         {
             CliResult::DownloadId { download_id } => Ok(download_id),
-            other => Err(Error::UnexpectedResponse {
+            other => Err(CommandError::UnexpectedResponse {
                 expected: "DownloadId",
                 actual: Box::new(other),
             }),
@@ -528,7 +590,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails.
-    pub async fn cancel_download(&self, download_id: DownloadId) -> Result<(), Error> {
+    pub async fn cancel_download(&self, download_id: DownloadId) -> CmdResult<()> {
         self.execute_unit(CliCommand::CancelDownload { download_id })
             .await
     }
@@ -538,7 +600,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails.
-    pub async fn pause_download(&self, download_id: DownloadId) -> Result<(), Error> {
+    pub async fn pause_download(&self, download_id: DownloadId) -> CmdResult<()> {
         self.execute_unit(CliCommand::PauseDownload { download_id })
             .await
     }
@@ -548,7 +610,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails.
-    pub async fn resume_download(&self, download_id: DownloadId) -> Result<(), Error> {
+    pub async fn resume_download(&self, download_id: DownloadId) -> CmdResult<()> {
         self.execute_unit(CliCommand::ResumeDownload { download_id })
             .await
     }
@@ -558,7 +620,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails.
-    pub async fn retry_download(&self, download_id: DownloadId) -> Result<(), Error> {
+    pub async fn retry_download(&self, download_id: DownloadId) -> CmdResult<()> {
         self.execute_unit(CliCommand::RetryDownload { download_id })
             .await
     }
@@ -568,7 +630,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails.
-    pub async fn erase_download(&self, download_id: DownloadId) -> Result<(), Error> {
+    pub async fn erase_download(&self, download_id: DownloadId) -> CmdResult<()> {
         self.execute_unit(CliCommand::EraseDownload { download_id })
             .await
     }
@@ -578,7 +640,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the command fails.
-    pub async fn erase_all_downloads(&self, state: Option<DownloadState>) -> Result<(), Error> {
+    pub async fn erase_all_downloads(&self, state: Option<DownloadState>) -> CmdResult<()> {
         self.execute_unit(CliCommand::EraseAllDownloads { state })
             .await
     }
@@ -594,7 +656,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the connection or subscribe command fails.
-    pub async fn subscribe_events(&self) -> Result<EventStream, Error> {
+    pub async fn subscribe_events(&self) -> Result<EventStream, EventStreamError> {
         EventStream::open(&self.socket_path, false, false).await
     }
 
@@ -610,7 +672,7 @@ impl Client {
         &self,
         include_windows_tabs: bool,
         include_downloads: bool,
-    ) -> Result<EventStream, Error> {
+    ) -> Result<EventStream, EventStreamError> {
         EventStream::open(&self.socket_path, include_windows_tabs, include_downloads).await
     }
 
@@ -627,15 +689,27 @@ impl Client {
     ///
     /// Returns an error if the command fails, the regex is invalid, no window matches, or
     /// multiple windows match and the policy is abort.
-    pub async fn resolve_windows(&self, matcher: &WindowMatcher) -> Result<Vec<WindowId>, Error> {
-        let windows = self.list_windows().await?;
-        let matched: Vec<WindowId> = windows.match_with(matcher)?.iter().map(|w| w.id).collect();
+    pub async fn resolve_windows(&self, matcher: &WindowMatcher) -> ResolveResult<Vec<WindowId>> {
+        let windows = self.list_windows().await.map_err(|e| e.widen())?;
+        let matched: Vec<WindowId> = windows
+            .match_with(matcher)
+            .map_err(CommandError::Other)?
+            .iter()
+            .map(|w| w.id)
+            .collect();
         let criteria = matcher.to_string();
         match matched.len() {
-            0 => Err(Error::NoMatchingWindow { criteria }),
+            0 => Err(CommandError::Other(MatchError::NoMatchingWindow {
+                criteria,
+            })),
             1 => Ok(matched),
             count => match matcher.if_matches_multiple() {
-                MultipleMatchBehavior::Abort => Err(Error::AmbiguousWindow { count, criteria }),
+                MultipleMatchBehavior::Abort => {
+                    Err(CommandError::Other(MatchError::AmbiguousWindow {
+                        count,
+                        criteria,
+                    }))
+                }
                 MultipleMatchBehavior::All => Ok(matched),
             },
         }
@@ -655,27 +729,35 @@ impl Client {
         &self,
         window_matcher: &WindowMatcher,
         tab_matcher: &TabMatcher,
-    ) -> Result<Vec<TabId>, Error> {
-        let windows = self.list_windows().await?;
-        let matched_windows = windows.match_with(window_matcher)?;
+    ) -> ResolveResult<Vec<TabId>> {
+        let windows = self.list_windows().await.map_err(|e| e.widen())?;
+        let matched_windows = windows
+            .match_with(window_matcher)
+            .map_err(CommandError::Other)?;
 
         let mut all_tabs: Vec<TabDetails> = Vec::new();
         for win in matched_windows {
-            let tabs = self.list_tabs(win.id).await?;
+            let tabs = self.list_tabs(win.id).await.map_err(|e| e.widen())?;
             all_tabs.extend(tabs);
         }
 
         let matched: Vec<TabId> = all_tabs
-            .match_with(tab_matcher)?
+            .match_with(tab_matcher)
+            .map_err(CommandError::Other)?
             .iter()
             .map(|t| t.id)
             .collect();
         let criteria = tab_matcher.to_string();
         match matched.len() {
-            0 => Err(Error::NoMatchingTab { criteria }),
+            0 => Err(CommandError::Other(MatchError::NoMatchingTab { criteria })),
             1 => Ok(matched),
             count => match tab_matcher.if_matches_multiple() {
-                MultipleMatchBehavior::Abort => Err(Error::AmbiguousTab { count, criteria }),
+                MultipleMatchBehavior::Abort => {
+                    Err(CommandError::Other(MatchError::AmbiguousTab {
+                        count,
+                        criteria,
+                    }))
+                }
                 MultipleMatchBehavior::All => Ok(matched),
             },
         }
@@ -693,29 +775,45 @@ impl Client {
 pub(crate) async fn send_command(
     socket_path: &Path,
     command: CliCommand,
-) -> Result<CliResult, Error> {
+) -> Result<CliResult, SendCommandError> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let request = CliRequest::new(request_id.clone(), command);
 
     #[cfg(unix)]
-    let stream = tokio::net::UnixStream::connect(socket_path).await?;
+    let stream = tokio::net::UnixStream::connect(socket_path)
+        .await
+        .map_err(SendCommandError::Connect)?;
     #[cfg(windows)]
     let stream = {
-        let pipe_name = crate::discovery::pipe_name_from_marker(socket_path)?;
-        tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name)?
+        let pipe_name = crate::discovery::pipe_name_from_marker(socket_path)
+            .map_err(SendCommandError::Connect)?;
+        tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(&pipe_name)
+            .map_err(SendCommandError::Connect)?
     };
 
     let (read_half, mut write_half) = tokio::io::split(stream);
 
-    let mut json = serde_json::to_vec(&request)?;
+    let mut json = serde_json::to_vec(&request).map_err(SendCommandError::Serialize)?;
     json.push(b'\n');
-    write_half.write_all(&json).await?;
+    write_half
+        .write_all(&json)
+        .await
+        .map_err(SendCommandError::Send)?;
 
     let mut reader = tokio::io::BufReader::new(read_half);
     let mut line = String::new();
-    reader.read_line(&mut line).await?;
+    reader
+        .read_line(&mut line)
+        .await
+        .map_err(SendCommandError::Receive)?;
 
-    let response: CliResponse = serde_json::from_str(line.trim_end())?;
+    let trimmed = line.trim_end().to_owned();
+    let response: CliResponse =
+        serde_json::from_str(&trimmed).map_err(|source| SendCommandError::Deserialize {
+            source,
+            raw: trimmed,
+        })?;
 
     if response.request_id != request_id {
         tracing::warn!(
@@ -727,7 +825,7 @@ pub(crate) async fn send_command(
 
     match response.outcome {
         CliOutcome::Ok(result) => Ok(result),
-        CliOutcome::Err(msg) => Err(Error::CommandFailed(msg)),
-        _ => Err(Error::CommandFailed("unknown outcome variant".to_owned())),
+        CliOutcome::Err(msg) => Err(SendCommandError::CommandRejected(msg)),
+        _ => Err(SendCommandError::UnknownOutcome),
     }
 }
