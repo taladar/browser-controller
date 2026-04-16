@@ -173,7 +173,7 @@ async fn match_by_window_title_regex_body(h: &Harness) {
             "list",
             "--window-title-regex",
             ".*",
-            "--if-matches-multiple",
+            "--if-matches-multiple-windows",
             "all",
         ],
     )
@@ -313,7 +313,7 @@ async fn match_by_window_not_focused_body(h: &Harness) {
             "tabs",
             "list",
             "--window-not-focused",
-            "--if-matches-multiple",
+            "--if-matches-multiple-windows",
             "all",
         ],
     )
@@ -407,7 +407,7 @@ async fn match_by_window_not_last_focused_body(h: &Harness) {
             "tabs",
             "list",
             "--window-not-last-focused",
-            "--if-matches-multiple",
+            "--if-matches-multiple-windows",
             "all",
         ],
     )
@@ -461,7 +461,7 @@ async fn match_by_window_state_body(h: &Harness) {
             "list",
             "--window-state",
             "normal",
-            "--if-matches-multiple",
+            "--if-matches-multiple-windows",
             "all",
         ],
     )
@@ -492,7 +492,7 @@ async fn match_by_window_state_chrome() {
     .await;
 }
 
-// --- Test: --if-matches-multiple abort (default behavior) ---
+// --- Test: --if-matches-multiple-windows abort (default behavior) ---
 
 async fn match_multiple_abort_body(h: &Harness) {
     // Open a second window so there are multiple
@@ -503,7 +503,7 @@ async fn match_multiple_abort_body(h: &Harness) {
         .expect("OpenWindow should succeed");
 
     // tabs list with --window-title-regex ".*" matches all windows;
-    // default --if-matches-multiple is abort, so this should fail
+    // default --if-matches-multiple-windows is abort, so this should fail
     run_cli_expect_failure(h, &["tabs", "list", "--window-title-regex", ".*"]).await;
 
     // Clean up
@@ -529,7 +529,7 @@ async fn match_multiple_abort_chrome() {
     .await;
 }
 
-// --- Test: --if-matches-multiple all ---
+// --- Test: --if-matches-multiple-windows all ---
 
 #[expect(
     clippy::panic,
@@ -543,7 +543,7 @@ async fn match_multiple_all_body(h: &Harness) {
         .await
         .expect("OpenWindow should succeed");
 
-    // tabs list with regex matching all + --if-matches-multiple all
+    // tabs list with regex matching all + --if-matches-multiple-windows all
     let stdout = run_cli(
         h,
         &[
@@ -551,7 +551,7 @@ async fn match_multiple_all_body(h: &Harness) {
             "list",
             "--window-title-regex",
             ".*",
-            "--if-matches-multiple",
+            "--if-matches-multiple-windows",
             "all",
         ],
     )

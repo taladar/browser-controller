@@ -138,6 +138,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
+ "humantime",
  "log-panics",
  "pretty_assertions",
  "serde",
@@ -221,6 +222,7 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "zeroize",
 ]
 
 [[package]]
@@ -732,6 +734,12 @@ name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
+
+[[package]]
+name = "humantime"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
 
 [[package]]
 name = "hyper"
@@ -2379,6 +2387,15 @@ dependencies = [
  "quote",
  "syn",
  "synstructure",
+]
+
+[[package]]
+name = "zeroize"
+version = "1.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

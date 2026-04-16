@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use browser_controller_client::{
     BooleanCondition, CliResult, Client, CookieStoreId, DiscoveredInstance, DownloadId,
-    MatchWith as _, OpenTabParamsBuilder, TabId, TabStatus, WindowId, WindowState,
+    MatchWith as _, OpenTabParamsBuilder, Password, TabId, TabStatus, WindowId, WindowState,
 };
 use tracing_subscriber::{
     EnvFilter, Layer as _, Registry, filter::LevelFilter, layer::SubscriberExt as _,
@@ -237,11 +237,20 @@ impl From<TabStatusArg> for TabStatus {
     }
 }
 
+/// Parse a duration string via [`humantime`] and reject zero durations.
+fn parse_nonzero_duration(s: &str) -> Result<Duration, String> {
+    let d: humantime::Duration = s.parse().map_err(|e| format!("{e}"))?;
+    if d.is_zero() {
+        return Err("timeout must be greater than zero".to_owned());
+    }
+    Ok(*d)
+}
+
 /// Criteria for selecting one or more browser windows (CLI argument type).
 ///
 /// All provided criteria are combined with AND logic. If no criteria are specified,
 /// every window will match, which will produce an error unless
-/// `--if-matches-multiple all` is also passed.
+/// `--if-matches-multiple-windows all` is also passed.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "Each bool is an independent opt-in filter flag; there is no simpler representation"
@@ -279,8 +288,8 @@ pub struct CliWindowMatcher {
     ///
     /// `abort` (the default) treats more than one match as an error.
     /// `all` applies the command to every matched window.
-    #[clap(long = "if-window-matches-multiple", default_value = "abort")]
-    pub if_matches_multiple: CliMultipleMatchBehavior,
+    #[clap(long = "if-matches-multiple-windows", default_value = "abort")]
+    pub if_matches_multiple_windows: CliMultipleMatchBehavior,
 }
 
 impl TryFrom<CliWindowMatcher> for browser_controller_client::WindowMatcher {
@@ -308,7 +317,7 @@ impl TryFrom<CliWindowMatcher> for browser_controller_client::WindowMatcher {
         if let Some(v) = m.window_state {
             b.window_state(WindowState::from(v));
         }
-        b.if_matches_multiple(m.if_matches_multiple.into());
+        b.if_matches_multiple(m.if_matches_multiple_windows.into());
         Ok(b.build()?)
     }
 }
@@ -338,7 +347,7 @@ impl TryFrom<&CliWindowMatcher> for browser_controller_client::WindowMatcher {
         if let Some(v) = m.window_state {
             b.window_state(WindowState::from(v));
         }
-        b.if_matches_multiple(m.if_matches_multiple.into());
+        b.if_matches_multiple(m.if_matches_multiple_windows.into());
         Ok(b.build()?)
     }
 }
@@ -347,7 +356,7 @@ impl TryFrom<&CliWindowMatcher> for browser_controller_client::WindowMatcher {
 ///
 /// All provided criteria are combined with AND logic. If no criteria are specified,
 /// every tab in every searched window will match, which will produce an error unless
-/// `--if-matches-multiple all` is also passed.
+/// `--if-matches-multiple-tabs all` is also passed.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "Each bool is an independent opt-in filter flag mirroring the boolean fields of TabDetails; there is no simpler representation"
@@ -439,8 +448,8 @@ pub struct CliTabMatcher {
     ///
     /// `abort` (the default) treats more than one match as an error.
     /// `all` applies the command to every matched tab.
-    #[clap(long = "if-tab-matches-multiple", default_value = "abort")]
-    pub if_matches_multiple: CliMultipleMatchBehavior,
+    #[clap(long = "if-matches-multiple-tabs", default_value = "abort")]
+    pub if_matches_multiple_tabs: CliMultipleMatchBehavior,
 }
 
 /// Apply an `Option<BooleanCondition>` to a builder setter if present.
@@ -507,7 +516,7 @@ impl TryFrom<CliTabMatcher> for browser_controller_client::TabMatcher {
         if let Some(v) = m.tab_container_name {
             b.tab_container_name(v);
         }
-        b.if_matches_multiple(m.if_matches_multiple.into());
+        b.if_matches_multiple(m.if_matches_multiple_tabs.into());
         Ok(b.build()?)
     }
 }
@@ -567,7 +576,7 @@ impl TryFrom<&CliTabMatcher> for browser_controller_client::TabMatcher {
         if let Some(ref v) = m.tab_container_name {
             b.tab_container_name(v.clone());
         }
-        b.if_matches_multiple(m.if_matches_multiple.into());
+        b.if_matches_multiple(m.if_matches_multiple_tabs.into());
         Ok(b.build()?)
     }
 }
@@ -609,9 +618,10 @@ struct Cli {
     /// If the mediator or extension does not respond within this time (e.g. due
     /// to an extension reload, crash, or a page that never finishes loading),
     /// the command fails with an error instead of hanging indefinitely.
-    /// Set to 0 to disable the timeout.
-    #[clap(long, short = 't', default_value = "30", global = true)]
-    timeout: u64,
+    ///
+    /// Accepts durations like `30s`, `5m`, `1m30s`.
+    #[clap(long, short = 't', default_value = "30s", global = true, value_parser = parse_nonzero_duration)]
+    timeout: Duration,
 }
 
 /// Available commands.
@@ -1599,10 +1609,7 @@ async fn do_stuff() -> Result<(), Error> {
 ///
 /// Returns an error if the command fails.
 async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), Error> {
-    let client = Client::new(
-        instance.socket_path.clone(),
-        Duration::from_secs(cli.timeout),
-    );
+    let client = Client::new(instance.socket_path.clone(), cli.timeout);
     match cli.command {
         Command::Windows(w) => match w.command {
             WindowsCommand::List => {
@@ -1690,7 +1697,7 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     }
                 }
                 // Resolve the password from the environment variable if specified.
-                let password = password_env
+                let password: Option<Password> = password_env
                     .map(|env_name| {
                         std::env::var(&env_name).map_err(|_not_set| {
                             Error::CommandFailed(format!(
@@ -1698,7 +1705,8 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                             ))
                         })
                     })
-                    .transpose()?;
+                    .transpose()?
+                    .map(Password::from);
 
                 let window_ids = client.resolve_windows(&((&window).try_into()?)).await?;
                 for window_id in window_ids {
@@ -1733,8 +1741,8 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
                     .await?;
                 for tab_id in tab_ids {
-                    client.activate_tab(tab_id).await?;
-                    print_result(&CliResult::Unit, cli.output)?;
+                    let tab = client.activate_tab(tab_id).await?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::Navigate { window, tab, url } => {
@@ -1742,8 +1750,8 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
                     .await?;
                 for tab_id in tab_ids {
-                    client.navigate_tab(tab_id, url.clone()).await?;
-                    print_result(&CliResult::Unit, cli.output)?;
+                    let tab = client.navigate_tab(tab_id, url.clone()).await?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::ReopenInContainer {
@@ -1770,8 +1778,8 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
                     .await?;
                 for tab_id in tab_ids {
-                    client.reload_tab(tab_id, bypass_cache).await?;
-                    print_result(&CliResult::Unit, cli.output)?;
+                    let tab = client.reload_tab(tab_id, bypass_cache).await?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::Close { window, tab } => {
@@ -1797,8 +1805,8 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
                     .await?;
                 for tab_id in tab_ids {
-                    client.pin_tab(tab_id).await?;
-                    print_result(&CliResult::Unit, cli.output)?;
+                    let tab = client.pin_tab(tab_id).await?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::Unpin { window, tab } => {
@@ -1806,8 +1814,8 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
                     .await?;
                 for tab_id in tab_ids {
-                    client.unpin_tab(tab_id).await?;
-                    print_result(&CliResult::Unit, cli.output)?;
+                    let tab = client.unpin_tab(tab_id).await?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::ToggleReaderMode { window, tab } => {
@@ -1815,8 +1823,8 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
                     .await?;
                 for tab_id in tab_ids {
-                    client.toggle_reader_mode(tab_id).await?;
-                    print_result(&CliResult::Unit, cli.output)?;
+                    let tab = client.toggle_reader_mode(tab_id).await?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::Discard { window, tab } => {
@@ -1833,8 +1841,8 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
                     .await?;
                 for tab_id in tab_ids {
-                    client.warmup_tab(tab_id).await?;
-                    print_result(&CliResult::Unit, cli.output)?;
+                    let tab = client.warmup_tab(tab_id).await?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::Mute { window, tab } => {
@@ -1842,8 +1850,8 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
                     .await?;
                 for tab_id in tab_ids {
-                    client.mute_tab(tab_id).await?;
-                    print_result(&CliResult::Unit, cli.output)?;
+                    let tab = client.mute_tab(tab_id).await?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::Unmute { window, tab } => {
@@ -1851,8 +1859,8 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
                     .await?;
                 for tab_id in tab_ids {
-                    client.unmute_tab(tab_id).await?;
-                    print_result(&CliResult::Unit, cli.output)?;
+                    let tab = client.unmute_tab(tab_id).await?;
+                    print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }
             TabsCommand::Move {

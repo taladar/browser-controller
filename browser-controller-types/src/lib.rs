@@ -5,6 +5,7 @@
 //! - The mediator and the Firefox extension (via native messaging, length-prefixed JSON)
 
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 /// Browser-assigned window identifier.
 ///
@@ -93,6 +94,47 @@ impl std::str::FromStr for CookieStoreId {
 
 impl AsRef<str> for CookieStoreId {
     fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A password that is zeroed from memory on drop.
+///
+/// The inner string is wrapped in [`Zeroizing`] so it is securely erased
+/// when this value is dropped. [`Debug`] output redacts the value.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Password(Zeroizing<String>);
+
+impl std::fmt::Debug for Password {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Password([REDACTED])")
+    }
+}
+
+impl PartialEq for Password {
+    fn eq(&self, other: &Self) -> bool {
+        *self.0 == *other.0
+    }
+}
+
+impl Eq for Password {}
+
+impl From<String> for Password {
+    fn from(s: String) -> Self {
+        Self(Zeroizing::new(s))
+    }
+}
+
+impl From<&str> for Password {
+    fn from(s: &str) -> Self {
+        Self(Zeroizing::new(s.to_owned()))
+    }
+}
+
+impl std::ops::Deref for Password {
+    type Target = str;
+    fn deref(&self) -> &str {
         &self.0
     }
 }
@@ -825,7 +867,7 @@ pub enum CliCommand {
         ///
         /// Used together with `username`. Requires `url` to be set.
         #[serde(default)]
-        password: Option<String>,
+        password: Option<Password>,
         /// If `true`, the new tab is created in the background and the currently active tab
         /// in the window remains active.
         #[serde(default)]

@@ -401,7 +401,7 @@ async fn cli_tab_cookie_store_id_matcher_body(h: &Harness) {
             "activate",
             "--tab-cookie-store-id",
             &container_id.0,
-            "--tab-window-id",
+            "--window-id",
             &w,
         ],
     )
@@ -464,7 +464,7 @@ async fn cli_tab_container_name_matcher_body(h: &Harness) {
             "activate",
             "--tab-container-name",
             &container_name,
-            "--tab-window-id",
+            "--window-id",
             &w,
         ],
     )

@@ -31,16 +31,22 @@ async fn run_cli(h: &Harness, args: &[&str]) -> bool {
 }
 
 async fn timeout_flag_body(h: &Harness) {
-    // Explicit timeout of 30s
+    // Explicit timeout with unit suffix
     assert!(
-        run_cli(h, &["-t", "30", "windows", "list"]).await,
-        "--timeout 30 should succeed",
+        run_cli(h, &["-t", "30s", "windows", "list"]).await,
+        "--timeout 30s should succeed",
     );
 
-    // Disabled timeout (0)
+    // Compound duration
     assert!(
-        run_cli(h, &["-t", "0", "windows", "list"]).await,
-        "--timeout 0 should succeed",
+        run_cli(h, &["-t", "1m30s", "windows", "list"]).await,
+        "--timeout 1m30s should succeed",
+    );
+
+    // Zero timeout should be rejected
+    assert!(
+        !run_cli(h, &["-t", "0s", "windows", "list"]).await,
+        "--timeout 0s should be rejected",
     );
 }
 

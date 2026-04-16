@@ -682,7 +682,8 @@ async function cmdToggleReaderMode(tabId) {
   if (browser.tabs.toggleReaderMode) {
     await browser.tabs.toggleReaderMode(tabId);
   }
-  return { type: "Unit" };
+  const tab = await browser.tabs.get(tabId);
+  return { type: "Tab", ...await serializeTabDetails(tab) };
 }
 
 /** Discards a tab, unloading its content from memory without closing it. */
@@ -693,11 +694,11 @@ async function cmdDiscardTab(tabId) {
 
 /** Warms up a discarded tab, loading its content into memory without activating it. */
 async function cmdWarmupTab(tabId) {
-  if (!browser.tabs.warmup) {
-    return { type: "Unit" };
+  if (browser.tabs.warmup) {
+    await browser.tabs.warmup(tabId);
   }
-  await browser.tabs.warmup(tabId);
-  return { type: "Unit" };
+  const tab = await browser.tabs.get(tabId);
+  return { type: "Tab", ...await serializeTabDetails(tab) };
 }
 
 /** Mutes a tab and returns its updated details. */

@@ -154,7 +154,7 @@ async fn match_by_tab_title_body(h: &Harness) {
             "activate",
             "--tab-title",
             "Test Page",
-            "--tab-window-id",
+            "--window-id",
             &w,
         ],
     )
@@ -200,7 +200,7 @@ async fn match_by_tab_title_regex_body(h: &Harness) {
             "activate",
             "--tab-title-regex",
             "Test.*",
-            "--tab-window-id",
+            "--window-id",
             &w,
         ],
     )
@@ -242,7 +242,7 @@ async fn match_by_tab_url_body(h: &Harness) {
     let w = wid.to_string();
     let stdout = run_cli(
         h,
-        &["tabs", "activate", "--tab-url", &url, "--tab-window-id", &w],
+        &["tabs", "activate", "--tab-url", &url, "--window-id", &w],
     )
     .await;
     let result: CliResult = serde_json::from_str(stdout.trim()).expect("parse");
@@ -287,7 +287,7 @@ async fn match_by_tab_url_domain_body(h: &Harness) {
             "activate",
             "--tab-url-domain",
             "www.google.com",
-            "--tab-window-id",
+            "--window-id",
             &w,
         ],
     )
@@ -333,7 +333,7 @@ async fn match_by_tab_url_regex_body(h: &Harness) {
             "activate",
             "--tab-url-regex",
             r"http://127\.0\.0\.1:\d+.*",
-            "--tab-window-id",
+            "--window-id",
             &w,
         ],
     )
@@ -362,18 +362,14 @@ async fn match_by_tab_url_regex_chrome() {
     .await;
 }
 
-// --- --tab-window-id + --tab-active ---
+// --- --window-id + --tab-active ---
 
 #[expect(clippy::panic, reason = "test assertions")]
 async fn match_by_tab_window_id_body(h: &Harness) {
     let wid = first_window_id(h).await;
     let w = wid.to_string();
 
-    let stdout = run_cli(
-        h,
-        &["tabs", "activate", "--tab-window-id", &w, "--tab-active"],
-    )
-    .await;
+    let stdout = run_cli(h, &["tabs", "activate", "--window-id", &w, "--tab-active"]).await;
     let result: CliResult = serde_json::from_str(stdout.trim()).expect("parse");
     match result {
         CliResult::Tab(d) => {
@@ -408,11 +404,7 @@ async fn match_by_tab_active_body(h: &Harness) {
     let tab2 = open_blank_tab(h, wid).await; // tab2 becomes active
     let w = wid.to_string();
 
-    let stdout = run_cli(
-        h,
-        &["tabs", "activate", "--tab-active", "--tab-window-id", &w],
-    )
-    .await;
+    let stdout = run_cli(h, &["tabs", "activate", "--tab-active", "--window-id", &w]).await;
     let result: CliResult = serde_json::from_str(stdout.trim()).expect("parse");
     match result {
         CliResult::Tab(d) => {
@@ -456,9 +448,9 @@ async fn match_by_tab_not_active_body(h: &Harness) {
             "tabs",
             "mute",
             "--tab-not-active",
-            "--tab-window-id",
+            "--window-id",
             &w,
-            "--if-matches-multiple",
+            "--if-matches-multiple-tabs",
             "all",
         ],
     )
@@ -501,11 +493,7 @@ async fn match_by_tab_pinned_body(h: &Harness) {
     h.client().pin_tab(tab_id).await.expect("pin");
     let w = wid.to_string();
 
-    let stdout = run_cli(
-        h,
-        &["tabs", "activate", "--tab-pinned", "--tab-window-id", &w],
-    )
-    .await;
+    let stdout = run_cli(h, &["tabs", "activate", "--tab-pinned", "--window-id", &w]).await;
     let result: CliResult = serde_json::from_str(stdout.trim()).expect("parse");
     match result {
         CliResult::Tab(d) => assert!(d.is_pinned, "matched tab should be pinned"),
@@ -547,9 +535,9 @@ async fn match_by_tab_not_pinned_body(h: &Harness) {
             "tabs",
             "mute",
             "--tab-not-pinned",
-            "--tab-window-id",
+            "--window-id",
             &w,
-            "--if-matches-multiple",
+            "--if-matches-multiple-tabs",
             "all",
         ],
     )
@@ -592,11 +580,7 @@ async fn match_by_tab_muted_body(h: &Harness) {
     h.client().mute_tab(tab_id).await.expect("mute");
     let w = wid.to_string();
 
-    let stdout = run_cli(
-        h,
-        &["tabs", "activate", "--tab-muted", "--tab-window-id", &w],
-    )
-    .await;
+    let stdout = run_cli(h, &["tabs", "activate", "--tab-muted", "--window-id", &w]).await;
     let result: CliResult = serde_json::from_str(stdout.trim()).expect("parse");
     match result {
         CliResult::Tab(d) => assert!(d.is_muted, "matched tab should be muted"),
@@ -683,7 +667,7 @@ async fn match_by_tab_discarded_body(h: &Harness) {
     let w = wid.to_string();
     let stdout = run_cli(
         h,
-        &["tabs", "activate", "--tab-discarded", "--tab-window-id", &w],
+        &["tabs", "activate", "--tab-discarded", "--window-id", &w],
     )
     .await;
     let result: CliResult = serde_json::from_str(stdout.trim()).expect("parse");
@@ -768,11 +752,7 @@ async fn match_by_tab_audible_body(h: &Harness) {
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
     let w = wid.to_string();
-    let stdout = run_cli(
-        h,
-        &["tabs", "activate", "--tab-audible", "--tab-window-id", &w],
-    )
-    .await;
+    let stdout = run_cli(h, &["tabs", "activate", "--tab-audible", "--window-id", &w]).await;
     let result: CliResult = serde_json::from_str(stdout.trim()).expect("parse");
     match result {
         CliResult::Tab(d) => {
@@ -919,7 +899,7 @@ async fn match_by_tab_in_reader_mode_body(h: &Harness) {
             "tabs",
             "activate",
             "--tab-in-reader-mode",
-            "--tab-window-id",
+            "--window-id",
             &w,
         ],
     )
@@ -1004,13 +984,7 @@ async fn match_by_tab_awaiting_auth_body(h: &Harness) {
     let w = wid.to_string();
     let stdout = run_cli(
         h,
-        &[
-            "tabs",
-            "activate",
-            "--tab-awaiting-auth",
-            "--tab-window-id",
-            &w,
-        ],
+        &["tabs", "activate", "--tab-awaiting-auth", "--window-id", &w],
     )
     .await;
     let result: CliResult = serde_json::from_str(stdout.trim()).expect("parse");
@@ -1123,7 +1097,7 @@ async fn match_by_tab_status_complete_chrome() {
     .await;
 }
 
-// --- --if-matches-multiple abort (tabs) ---
+// --- --if-matches-multiple-tabs abort (tabs) ---
 
 async fn match_tab_multiple_abort_body(h: &Harness) {
     let wid = first_window_id(h).await;
@@ -1137,7 +1111,7 @@ async fn match_tab_multiple_abort_body(h: &Harness) {
         &[
             "tabs",
             "activate",
-            "--tab-window-id",
+            "--window-id",
             &w,
             "--tab-url-regex",
             ".*",
@@ -1164,7 +1138,7 @@ async fn match_tab_multiple_abort_chrome() {
     .await;
 }
 
-// --- --if-matches-multiple all (tabs) ---
+// --- --if-matches-multiple-tabs all (tabs) ---
 
 async fn match_tab_multiple_all_body(h: &Harness) {
     let wid = first_window_id(h).await;
@@ -1178,11 +1152,11 @@ async fn match_tab_multiple_all_body(h: &Harness) {
         &[
             "tabs",
             "mute",
-            "--tab-window-id",
+            "--window-id",
             &w,
             "--tab-url-regex",
             ".*",
-            "--if-matches-multiple",
+            "--if-matches-multiple-tabs",
             "all",
         ],
     )

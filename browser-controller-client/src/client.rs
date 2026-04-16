@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use browser_controller_types::{
     BrowserInfo, CliCommand, CliOutcome, CliRequest, CliResponse, CliResult, ContainerInfo,
-    CookieStoreId, DownloadId, DownloadItem, DownloadState, FilenameConflictAction, TabDetails,
-    TabId, WindowId, WindowSummary,
+    CookieStoreId, DownloadId, DownloadItem, DownloadState, FilenameConflictAction, Password,
+    TabDetails, TabId, WindowId, WindowSummary,
 };
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
 
@@ -88,7 +88,7 @@ pub struct OpenTabParams {
     pub(crate) username: Option<String>,
     /// Password for HTTP authentication.
     #[builder(default)]
-    pub(crate) password: Option<String>,
+    pub(crate) password: Option<Password>,
     /// If `true`, the tab opens in the background.
     #[builder(default)]
     pub(crate) background: bool,
@@ -384,9 +384,9 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns an error if the command fails.
-    pub async fn toggle_reader_mode(&self, tab_id: TabId) -> CmdResult<()> {
-        self.execute_unit(CliCommand::ToggleReaderMode { tab_id })
+    /// Returns an error if the command fails or returns an unexpected response.
+    pub async fn toggle_reader_mode(&self, tab_id: TabId) -> CmdResult<TabDetails> {
+        self.execute_expect_tab(CliCommand::ToggleReaderMode { tab_id })
             .await
     }
 
@@ -403,9 +403,10 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns an error if the command fails.
-    pub async fn warmup_tab(&self, tab_id: TabId) -> CmdResult<()> {
-        self.execute_unit(CliCommand::WarmupTab { tab_id }).await
+    /// Returns an error if the command fails or returns an unexpected response.
+    pub async fn warmup_tab(&self, tab_id: TabId) -> CmdResult<TabDetails> {
+        self.execute_expect_tab(CliCommand::WarmupTab { tab_id })
+            .await
     }
 
     /// Mute a tab.
