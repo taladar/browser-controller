@@ -292,6 +292,21 @@ pub struct CliWindowMatcher {
     pub if_matches_multiple_windows: CliMultipleMatchBehavior,
 }
 
+impl CliWindowMatcher {
+    /// Return the names of any filter flags that are not supported by the given browser.
+    fn unsupported_flags_for_browser(
+        &self,
+        info: &browser_controller_client::BrowserInfo,
+    ) -> Vec<&'static str> {
+        let is_firefox = info.browser_vendor.as_deref() == Some("Mozilla");
+        let mut flags = Vec::new();
+        if !is_firefox && self.window_title_prefix.is_some() {
+            flags.push("--window-title-prefix");
+        }
+        flags
+    }
+}
+
 impl TryFrom<CliWindowMatcher> for browser_controller_client::WindowMatcher {
     type Error = Error;
     fn try_from(m: CliWindowMatcher) -> Result<Self, Self::Error> {
@@ -433,8 +448,11 @@ pub struct CliTabMatcher {
     #[clap(long)]
     pub tab_has_attention: bool,
     /// Match only tabs that do not have the attention flag set.
-    #[clap(long, conflicts_with = "tab_has_attention")]
-    pub tab_not_has_attention: bool,
+    #[clap(
+        long = "tab-does-not-have-attention",
+        conflicts_with = "tab_has_attention"
+    )]
+    pub tab_does_not_have_attention: bool,
     /// Match only tabs with this loading status.
     #[clap(long)]
     pub tab_status: Option<TabStatusArg>,
@@ -459,6 +477,38 @@ macro_rules! set_bool_condition {
             $builder.$setter(v);
         }
     };
+}
+
+impl CliTabMatcher {
+    /// Return the names of any filter flags that are not supported by the given browser.
+    fn unsupported_flags_for_browser(
+        &self,
+        info: &browser_controller_client::BrowserInfo,
+    ) -> Vec<&'static str> {
+        let is_firefox = info.browser_vendor.as_deref() == Some("Mozilla");
+        let mut flags = Vec::new();
+        if !is_firefox {
+            if self.tab_in_reader_mode {
+                flags.push("--tab-in-reader-mode");
+            }
+            if self.tab_not_in_reader_mode {
+                flags.push("--tab-not-in-reader-mode");
+            }
+            if self.tab_has_attention {
+                flags.push("--tab-has-attention");
+            }
+            if self.tab_does_not_have_attention {
+                flags.push("--tab-does-not-have-attention");
+            }
+            if self.tab_cookie_store_id.is_some() {
+                flags.push("--tab-cookie-store-id");
+            }
+            if self.tab_container_name.is_some() {
+                flags.push("--tab-container-name");
+            }
+        }
+        flags
+    }
 }
 
 impl TryFrom<CliTabMatcher> for browser_controller_client::TabMatcher {
@@ -505,7 +555,7 @@ impl TryFrom<CliTabMatcher> for browser_controller_client::TabMatcher {
             b,
             tab_has_attention,
             m.tab_has_attention,
-            m.tab_not_has_attention
+            m.tab_does_not_have_attention
         );
         if let Some(v) = m.tab_status {
             b.tab_status(TabStatus::from(v));
@@ -565,7 +615,7 @@ impl TryFrom<&CliTabMatcher> for browser_controller_client::TabMatcher {
             b,
             tab_has_attention,
             m.tab_has_attention,
-            m.tab_not_has_attention
+            m.tab_does_not_have_attention
         );
         if let Some(v) = m.tab_status {
             b.tab_status(TabStatus::from(v));
@@ -649,7 +699,7 @@ pub enum Command {
     Tabs(Box<TabsArgs>),
     /// Manage downloads.
     Downloads(DownloadsArgs),
-    /// Manage Firefox containers (contextual identities).
+    /// Manage Firefox containers (contextual identities). Firefox-only.
     Containers(ContainersArgs),
     /// Generate a man page for this tool.
     GenerateManpage {
@@ -732,9 +782,11 @@ pub enum WindowsCommand {
     /// Open a new browser window.
     Open {
         /// Title prefix (Firefox `titlePreface`) to set on the new window immediately after opening.
+        /// Firefox-only; returns an error on other browsers.
         #[clap(long)]
         title_prefix: Option<String>,
         /// Only open the window if no existing window already has the title prefix given by `--title-prefix`.
+        /// Firefox-only (requires `--title-prefix` which is Firefox-only).
         ///
         /// If a window with that title prefix already exists the command succeeds silently
         /// without opening a new window. Requires `--title-prefix`.
@@ -754,6 +806,8 @@ pub enum WindowsCommand {
         window: CliWindowMatcher,
     },
     /// Set the title prefix (Firefox `titlePreface`) for one or more windows.
+    ///
+    /// Firefox-only.
     SetTitlePrefix {
         /// Criteria selecting the window(s) to modify.
         #[clap(flatten)]
@@ -762,6 +816,8 @@ pub enum WindowsCommand {
         prefix: String,
     },
     /// Remove the title prefix from one or more windows.
+    ///
+    /// Firefox-only.
     RemoveTitlePrefix {
         /// Criteria selecting the window(s) to modify.
         #[clap(flatten)]
@@ -828,9 +884,9 @@ pub enum TabsCommand {
         #[clap(long, requires = "url")]
         if_url_does_not_exist: bool,
         /// Open the tab in a specific Firefox container (cookie store ID).
+        /// Firefox-only.
         ///
         /// E.g. `firefox-container-1`. Use `containers list` to see available containers.
-        /// Ignored on browsers without container support.
         #[clap(long)]
         container: Option<CookieStoreId>,
     },
@@ -933,6 +989,8 @@ pub enum TabsCommand {
         tab: CliTabMatcher,
     },
     /// Warm up one or more discarded tabs, loading their content into memory without activating.
+    ///
+    /// Firefox-only.
     Warmup {
         /// Criteria selecting the window(s) to search for tabs.
         #[clap(flatten)]
@@ -1144,10 +1202,10 @@ pub struct ContainersArgs {
     command: ContainersCommand,
 }
 
-/// Operations on Firefox containers (contextual identities).
+/// Operations on Firefox containers (contextual identities). Firefox-only.
 #[derive(clap::Subcommand, Debug)]
 pub enum ContainersCommand {
-    /// List all available containers.
+    /// List all available containers. Firefox-only.
     List,
 }
 
@@ -1457,27 +1515,138 @@ fn print_result(result: &CliResult, format: OutputFormat) -> Result<(), Error> {
 /// Subscribes to events via [`Client::subscribe_events_filtered`] and then
 /// prints each event as a JSON line to stdout. Filtering is performed
 /// server-side by the mediator, so every event received is printed.
-/// Runs until the connection closes or an error occurs.
+///
+/// When the connection drops (mediator restart, browser exit, etc.), the
+/// function re-discovers the mediator and reconnects with exponential
+/// backoff. Events that occur during the reconnect gap are lost; a warning
+/// is printed to stderr.
+///
+/// This function runs until interrupted — it only returns `Err` if a
+/// non-recoverable error occurs (e.g. stdout is broken).
 ///
 /// # Errors
 ///
-/// Returns an error if the connection or I/O fails.
+/// Returns an error if stdout I/O fails.
 #[expect(
     clippy::print_stdout,
     reason = "event stream output goes to stdout by design"
 )]
+#[expect(
+    clippy::print_stderr,
+    reason = "reconnect warnings go to stderr by design"
+)]
 async fn stream_events(
-    client: &Client,
+    matcher: &browser_controller_client::InstanceMatcher,
     filter_downloads: bool,
     filter_windows_tabs: bool,
+    timeout: Duration,
 ) -> Result<(), Error> {
-    let mut events = client
-        .subscribe_events_filtered(filter_windows_tabs, filter_downloads)
-        .await?;
-    while let Some(event) = events.next_event().await? {
-        println!("{}", serde_json::to_string(&event)?);
+    const INITIAL_RECONNECT_DELAY: Duration = Duration::from_secs(1);
+    const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+
+    let mut reconnect_delay = INITIAL_RECONNECT_DELAY;
+
+    loop {
+        // Discover and connect to a mediator instance.
+        let client = match discover_and_connect(matcher, timeout).await {
+            Ok(c) => {
+                reconnect_delay = INITIAL_RECONNECT_DELAY;
+                c
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to discover mediator instance: {e}. \
+                     Retrying in {reconnect_delay:?}...",
+                );
+                tokio::time::sleep(reconnect_delay).await;
+                reconnect_delay = reconnect_delay.saturating_mul(2).min(MAX_RECONNECT_DELAY);
+                continue;
+            }
+        };
+
+        // Subscribe to events.
+        let mut events = match client
+            .subscribe_events_filtered(filter_windows_tabs, filter_downloads)
+            .await
+        {
+            Ok(ev) => {
+                reconnect_delay = INITIAL_RECONNECT_DELAY;
+                ev
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to subscribe to events: {e}. \
+                     Retrying in {reconnect_delay:?}...",
+                );
+                tokio::time::sleep(reconnect_delay).await;
+                reconnect_delay = reconnect_delay.saturating_mul(2).min(MAX_RECONNECT_DELAY);
+                continue;
+            }
+        };
+
+        // Read events until the stream ends.
+        loop {
+            match events.next_event().await {
+                Ok(Some(event)) => {
+                    println!("{}", serde_json::to_string(&event)?);
+                }
+                Ok(None) => {
+                    eprintln!(
+                        "Warning: event stream disconnected. \
+                         Events may be lost. Reconnecting in {reconnect_delay:?}...",
+                    );
+                    break;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: event stream error: {e}. \
+                         Events may be lost. Reconnecting in {reconnect_delay:?}...",
+                    );
+                    break;
+                }
+            }
+        }
+
+        tokio::time::sleep(reconnect_delay).await;
+        reconnect_delay = reconnect_delay.saturating_mul(2).min(MAX_RECONNECT_DELAY);
     }
-    Ok(())
+}
+
+/// Discover mediator instances matching the given criteria and return a [`Client`].
+///
+/// # Errors
+///
+/// Returns an error if discovery fails, no instances match, or the match is ambiguous.
+async fn discover_and_connect(
+    matcher: &browser_controller_client::InstanceMatcher,
+    timeout: Duration,
+) -> Result<Client, Error> {
+    let instances = browser_controller_client::discover_instances().await?;
+    let matched = instances.match_with(matcher)?;
+    let instance =
+        matched
+            .first()
+            .ok_or_else(|| browser_controller_client::DiscoveryError::NoInstances {
+                dir: browser_controller_client::socket_dir().unwrap_or_default(),
+            })?;
+    if matched.len() > 1
+        && matches!(
+            matcher.if_matches_multiple(),
+            browser_controller_client::MultipleMatchBehavior::Abort
+        )
+    {
+        return Err(browser_controller_client::MatchError::AmbiguousInstance {
+            count: matched.len(),
+            criteria: matcher.to_string(),
+        }
+        .into());
+    }
+    tracing::debug!(
+        browser = %instance.info.browser_name,
+        pid = instance.info.pid,
+        "Selected browser instance for event stream",
+    );
+    Ok(Client::new(instance.socket_path.clone(), timeout))
 }
 
 /// Main application logic.
@@ -1559,12 +1728,23 @@ async fn do_stuff() -> Result<(), Error> {
         | Command::EventStream { .. } => {}
     }
 
-    // Commands that require a browser connection.
-    let instances = browser_controller_client::discover_instances().await?;
     let matcher: browser_controller_client::InstanceMatcher = match cli.instance {
         Some(ref s) => s.as_str().into(),
         None => browser_controller_client::InstanceMatcher::default(),
     };
+
+    // Event streaming handles its own discovery and reconnection.
+    if let Command::EventStream {
+        downloads,
+        windows_tabs,
+    } = &cli.command
+    {
+        stream_events(&matcher, *downloads, *windows_tabs, cli.timeout).await?;
+        return Ok(());
+    }
+
+    // Commands that require a browser connection.
+    let instances = browser_controller_client::discover_instances().await?;
     let matched = instances.match_with(&matcher)?;
     let Some(instance) = matched.first() else {
         let dir = browser_controller_client::socket_dir()?;
@@ -1588,19 +1768,74 @@ async fn do_stuff() -> Result<(), Error> {
         "Selected browser instance",
     );
 
-    if let Command::EventStream {
-        downloads,
-        windows_tabs,
-    } = &cli.command
-    {
-        // Event streaming is long-lived; use a large timeout for the
-        // initial subscribe command but events themselves are unbounded.
-        let client = Client::new(instance.socket_path.clone(), Duration::from_secs(30));
-        stream_events(&client, *downloads, *windows_tabs).await?;
-        return Ok(());
-    }
-
     execute_command(cli, instance).await
+}
+
+/// Check that no browser-specific filter flags are used with an incompatible browser.
+///
+/// Returns an error listing the unsupported flags if any are found.
+fn validate_flags_for_browser(
+    command: &Command,
+    info: &browser_controller_client::BrowserInfo,
+) -> Result<(), Error> {
+    let mut unsupported = Vec::new();
+    match command {
+        Command::Windows(w) => match &w.command {
+            WindowsCommand::Close { window }
+            | WindowsCommand::SetTitlePrefix { window, .. }
+            | WindowsCommand::RemoveTitlePrefix { window } => {
+                unsupported.extend(window.unsupported_flags_for_browser(info));
+            }
+            WindowsCommand::List | WindowsCommand::Open { .. } => {}
+        },
+        Command::Tabs(t) => {
+            // Every tab command variant that carries matchers follows the same
+            // pattern: a `window` field and (for most) a `tab` field.
+            let (win, tab): (Option<&CliWindowMatcher>, Option<&CliTabMatcher>) = match &t.command {
+                TabsCommand::List { window }
+                | TabsCommand::Sort { window, .. }
+                | TabsCommand::Open { window, .. } => (Some(window), None),
+                TabsCommand::Activate { window, tab }
+                | TabsCommand::Navigate { window, tab, .. }
+                | TabsCommand::ReopenInContainer { window, tab, .. }
+                | TabsCommand::Reload { window, tab, .. }
+                | TabsCommand::Close { window, tab }
+                | TabsCommand::Pin { window, tab }
+                | TabsCommand::Unpin { window, tab }
+                | TabsCommand::ToggleReaderMode { window, tab }
+                | TabsCommand::Discard { window, tab }
+                | TabsCommand::Warmup { window, tab }
+                | TabsCommand::Mute { window, tab }
+                | TabsCommand::Unmute { window, tab }
+                | TabsCommand::Move { window, tab, .. }
+                | TabsCommand::Back { window, tab, .. }
+                | TabsCommand::Forward { window, tab, .. } => (Some(window), Some(tab)),
+            };
+            if let Some(w) = win {
+                unsupported.extend(w.unsupported_flags_for_browser(info));
+            }
+            if let Some(t) = tab {
+                unsupported.extend(t.unsupported_flags_for_browser(info));
+            }
+        }
+        Command::Instances
+        | Command::EventStream { .. }
+        | Command::Downloads(_)
+        | Command::Containers(_)
+        | Command::GenerateManpage { .. }
+        | Command::GenerateShellCompletion { .. }
+        | Command::InstallManifest { .. }
+        | Command::LoadExtension { .. } => {}
+    }
+    if unsupported.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::CommandFailed(format!(
+            "the following flags are not supported on {}: {}",
+            info.browser_name,
+            unsupported.join(", "),
+        )))
+    }
 }
 
 /// Execute the selected command against the given browser instance.
@@ -1609,6 +1844,7 @@ async fn do_stuff() -> Result<(), Error> {
 ///
 /// Returns an error if the command fails.
 async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), Error> {
+    validate_flags_for_browser(&cli.command, &instance.info)?;
     let client = Client::new(instance.socket_path.clone(), cli.timeout);
     match cli.command {
         Command::Windows(w) => match w.command {

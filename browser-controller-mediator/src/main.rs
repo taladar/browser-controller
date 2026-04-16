@@ -24,6 +24,9 @@ use tracing_subscriber::{
 /// Maximum size of a native messaging message the extension may send (1 MiB).
 const MAX_NATIVE_MESSAGE_SIZE: u32 = 0x0010_0000;
 
+/// Maximum time to wait for the initial `Hello` message from the extension.
+const HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Errors that can occur in the mediator.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -46,6 +49,10 @@ pub enum Error {
     /// The native messaging connection was closed without a preceding `Hello` message.
     #[error("native messaging connection closed before receiving Hello from extension")]
     NativeMessagingClosedBeforeHello,
+
+    /// Timed out waiting for the initial `Hello` message from the extension.
+    #[error("timed out after {0:?} waiting for Hello from extension")]
+    HelloTimeout(std::time::Duration),
 
     /// An incoming native messaging message exceeded the maximum allowed size.
     #[error("native messaging message size {size} exceeds maximum {MAX_NATIVE_MESSAGE_SIZE}")]
@@ -262,6 +269,10 @@ where
                                     count = n,
                                     "Event subscriber lagged; {n} events dropped",
                                 );
+                                let lost = BrowserEvent::EventsLost { count: n };
+                                let mut json = serde_json::to_vec(&lost)?;
+                                json.push(b'\n');
+                                write_half.write_all(&json).await?;
                             }
                             Err(broadcast::error::RecvError::Closed) => {
                                 break;
@@ -750,54 +761,59 @@ async fn run() -> Result<(), Error> {
         }
     });
 
-    // Wait for the initial Hello from the extension.
-    let browser_info = loop {
-        match ext_msg_rx.recv().await {
-            Some(Ok(Some(ExtensionMessage::Hello(hello)))) => {
-                let profile_id = read_parent_profile_id(ppid_u32);
-                let info = browser_controller_types::BrowserInfo::new(
-                    hello.browser_name.clone(),
-                    hello.browser_vendor.clone(),
-                    hello.browser_version.clone(),
-                    ppid_u32,
-                    profile_id.clone(),
-                );
-                let vendor_str = hello
-                    .browser_vendor
-                    .as_deref()
-                    .map(|v| format!(" ({v})"))
-                    .unwrap_or_default();
-                let profile_str = profile_id
-                    .as_deref()
-                    .map(|p| format!(", profile {p}"))
-                    .unwrap_or_default();
-                tracing::info!(
-                    mediator_pid = std::process::id(),
-                    browser_name = %hello.browser_name,
-                    browser_vendor = ?hello.browser_vendor,
-                    browser_version = %hello.browser_version,
-                    browser_pid = ppid_u32,
-                    profile_id = ?profile_id,
-                    "Connected to browser instance: {}{} {}, pid {}{}", hello.browser_name, vendor_str, hello.browser_version, ppid_u32, profile_str,
-                );
-                break info;
+    // Wait for the initial Hello from the extension, with a timeout to avoid
+    // hanging forever if the extension fails to send it.
+    let browser_info = tokio::time::timeout(HELLO_TIMEOUT, async {
+        loop {
+            match ext_msg_rx.recv().await {
+                Some(Ok(Some(ExtensionMessage::Hello(hello)))) => {
+                    let profile_id = read_parent_profile_id(ppid_u32);
+                    let info = browser_controller_types::BrowserInfo::new(
+                        hello.browser_name.clone(),
+                        hello.browser_vendor.clone(),
+                        hello.browser_version.clone(),
+                        ppid_u32,
+                        profile_id.clone(),
+                    );
+                    let vendor_str = hello
+                        .browser_vendor
+                        .as_deref()
+                        .map(|v| format!(" ({v})"))
+                        .unwrap_or_default();
+                    let profile_str = profile_id
+                        .as_deref()
+                        .map(|p| format!(", profile {p}"))
+                        .unwrap_or_default();
+                    tracing::info!(
+                        mediator_pid = std::process::id(),
+                        browser_name = %hello.browser_name,
+                        browser_vendor = ?hello.browser_vendor,
+                        browser_version = %hello.browser_version,
+                        browser_pid = ppid_u32,
+                        profile_id = ?profile_id,
+                        "Connected to browser instance: {}{} {}, pid {}{}", hello.browser_name, vendor_str, hello.browser_version, ppid_u32, profile_str,
+                    );
+                    break Ok(info);
+                }
+                Some(Ok(Some(ExtensionMessage::Response(r)))) => {
+                    tracing::warn!(
+                        request_id = %r.request_id,
+                        "Received Response before Hello; ignoring",
+                    );
+                }
+                Some(Ok(Some(ExtensionMessage::Event { .. }))) => {
+                    tracing::debug!("Received browser event before Hello; ignoring");
+                }
+                Some(Ok(Some(_))) => {
+                    tracing::debug!("Received unknown extension message before Hello; ignoring");
+                }
+                Some(Ok(None)) | None => return Err(Error::NativeMessagingClosedBeforeHello),
+                Some(Err(e)) => return Err(e),
             }
-            Some(Ok(Some(ExtensionMessage::Response(r)))) => {
-                tracing::warn!(
-                    request_id = %r.request_id,
-                    "Received Response before Hello; ignoring",
-                );
-            }
-            Some(Ok(Some(ExtensionMessage::Event { .. }))) => {
-                tracing::debug!("Received browser event before Hello; ignoring");
-            }
-            Some(Ok(Some(_))) => {
-                tracing::debug!("Received unknown extension message before Hello; ignoring");
-            }
-            Some(Ok(None)) | None => return Err(Error::NativeMessagingClosedBeforeHello),
-            Some(Err(e)) => return Err(e),
         }
-    };
+    })
+    .await
+    .map_err(|_elapsed| Error::HelloTimeout(HELLO_TIMEOUT))??;
 
     // Map from request_id to the oneshot sender waiting for its response.
     let mut pending: HashMap<String, oneshot::Sender<CliOutcome>> = HashMap::new();
@@ -888,6 +904,20 @@ async fn run() -> Result<(), Error> {
                     }
                 }
             }
+        }
+    }
+
+    // Send an error to all clients still waiting for a response so they
+    // don't have to wait for their timeout.
+    if !pending.is_empty() {
+        tracing::info!(
+            count = pending.len(),
+            "Notifying pending clients of extension disconnect",
+        );
+        for (_request_id, response_tx) in pending {
+            let outcome =
+                CliOutcome::Err("extension disconnected while command was pending".to_owned());
+            drop(response_tx.send(outcome));
         }
     }
 

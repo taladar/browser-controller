@@ -162,9 +162,25 @@ async fn query_instance(socket_path: &Path) -> Result<BrowserInfo, DiscoveryErro
     }
 }
 
+/// Check whether a process with the given PID is currently running.
+fn is_pid_alive(pid: u32) -> bool {
+    let s = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing().with_processes(sysinfo::ProcessRefreshKind::nothing()),
+    );
+    s.process(sysinfo::Pid::from_u32(pid)).is_some()
+}
+
+/// Extract the PID encoded in a socket/marker filename (e.g. `12345.sock` → `12345`).
+fn pid_from_socket_path(path: &Path) -> Option<u32> {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .and_then(|s| s.parse::<u32>().ok())
+}
+
 /// Discover all running mediator instances by scanning the socket directory.
 ///
-/// Sockets that cannot be connected to (e.g. stale) are silently skipped.
+/// Stale socket files (whose PID no longer exists) are removed automatically.
+/// Sockets that cannot be connected to are silently skipped.
 ///
 /// # Errors
 ///
@@ -181,6 +197,26 @@ pub async fn discover_instances() -> Result<Vec<DiscoveredInstance>, DiscoveryEr
 
     let mut instances = Vec::new();
     for socket_path in sock_paths {
+        // If we can extract a PID from the filename and that process no longer
+        // exists, remove the stale socket file without attempting a connection.
+        if let Some(pid) = pid_from_socket_path(&socket_path)
+            && !is_pid_alive(pid)
+        {
+            tracing::debug!(
+                socket = %socket_path.display(),
+                pid = pid,
+                "Removing stale socket file (process no longer exists)",
+            );
+            if let Err(e) = fs_err::remove_file(&socket_path) {
+                tracing::debug!(
+                    socket = %socket_path.display(),
+                    error = %e,
+                    "Failed to remove stale socket file",
+                );
+            }
+            continue;
+        }
+
         match query_instance(&socket_path).await {
             Ok(info) => {
                 tracing::debug!(

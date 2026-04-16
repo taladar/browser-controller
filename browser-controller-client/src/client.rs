@@ -52,6 +52,14 @@ pub enum SendCommandError {
     /// The response contained an unknown outcome variant.
     #[error("unknown response outcome variant")]
     UnknownOutcome,
+    /// The response's request ID did not match the request.
+    #[error("response request_id mismatch: expected {expected}, received {received}")]
+    RequestIdMismatch {
+        /// The request ID that was sent.
+        expected: String,
+        /// The request ID that was received.
+        received: String,
+    },
 }
 
 /// An async client for communicating with a browser-controller mediator.
@@ -817,11 +825,10 @@ pub(crate) async fn send_command(
         })?;
 
     if response.request_id != request_id {
-        tracing::warn!(
-            expected = %request_id,
-            received = %response.request_id,
-            "Response request_id mismatch",
-        );
+        return Err(SendCommandError::RequestIdMismatch {
+            expected: request_id,
+            received: response.request_id,
+        });
     }
 
     match response.outcome {

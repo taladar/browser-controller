@@ -81,6 +81,23 @@ See `browser-controller --help` or the
 [browser-controller-cli README](browser-controller-cli/README.md) for the
 full command reference.
 
+## Security
+
+The mediator's IPC socket is created in the user's runtime directory
+(`$XDG_RUNTIME_DIR` on Linux, which is typically mode 0700). Any process
+running as the same user can connect to the socket and issue commands to the
+browser. There is no additional authentication layer beyond the filesystem
+permissions on the socket directory.
+
+This is intentional — adding authentication would require persistent
+configuration state in the extension, complicating setup for a tool whose
+threat model is already scoped to same-user local access. Moreover, any
+process that can connect to the socket could also read configuration files
+for the CLI or client library that would contain the authentication
+credentials, so socket-level authentication would not meaningfully raise
+the bar. If you need stronger isolation, ensure that untrusted processes
+do not run under your user account.
+
 ## Development
 
 ### Loading the extension from source

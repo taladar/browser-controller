@@ -46,15 +46,43 @@ browser-controller install-manifest --browser chrome --extension-id <id>
 |---|---|
 | `instances` | List all running mediator instances |
 | `event-stream` | Stream browser events as newline-delimited JSON |
+| **Windows** | |
 | `windows list` | List all open windows with their tabs |
 | `windows open` | Open a new browser window |
-| `windows close <id>` | Close a window |
-| `windows set-title-prefix <id> <prefix>` | Set a window title prefix |
-| `windows remove-title-prefix <id>` | Remove a window title prefix |
-| `tabs list <window-id>` | List tabs in a window |
-| `tabs open <window-id>` | Open a new tab |
-| `tabs close <tab-id>` | Close a tab |
-| `tabs navigate <tab-id> <url>` | Navigate a tab to a URL |
+| `windows close` | Close one or more windows |
+| `windows set-title-prefix` | Set a window title prefix (Firefox-only) |
+| `windows remove-title-prefix` | Remove a window title prefix (Firefox-only) |
+| **Tabs** | |
+| `tabs list` | List all tabs in one or more windows |
+| `tabs open` | Open a new tab in a window |
+| `tabs activate` | Activate (switch to) a tab |
+| `tabs navigate` | Navigate a tab to a new URL |
+| `tabs reopen-in-container` | Reopen tab(s) in a different container (Firefox-only) |
+| `tabs reload` | Reload one or more tabs |
+| `tabs close` | Close one or more tabs |
+| `tabs pin` | Pin one or more tabs |
+| `tabs unpin` | Unpin one or more tabs |
+| `tabs toggle-reader-mode` | Toggle Reader Mode for a tab (Firefox-only) |
+| `tabs discard` | Discard (unload) one or more tabs from memory |
+| `tabs warmup` | Warm up discarded tabs without activating (Firefox-only) |
+| `tabs mute` | Mute one or more tabs |
+| `tabs unmute` | Unmute one or more tabs |
+| `tabs move` | Move a tab to a new position |
+| `tabs back` | Navigate backward in session history |
+| `tabs forward` | Navigate forward in session history |
+| `tabs sort` | Sort tabs by domain order |
+| **Downloads** | |
+| `downloads list` | List downloads, optionally filtered by state |
+| `downloads start` | Start a new download |
+| `downloads cancel` | Cancel an active download |
+| `downloads pause` | Pause an active download |
+| `downloads resume` | Resume a paused download |
+| `downloads retry` | Retry an interrupted download |
+| `downloads erase` | Remove a download from browser history |
+| `downloads clear` | Clear all downloads from history |
+| **Containers** | |
+| `containers list` | List all Firefox containers (Firefox-only) |
+| **Setup & Tools** | |
 | `install-manifest` | Install the native messaging host manifest |
 | `load-extension` | Load/reload a temporary extension via Firefox RDP (development only) |
 | `generate-manpage` | Generate a man page |

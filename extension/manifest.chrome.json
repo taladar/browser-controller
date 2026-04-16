@@ -4,13 +4,12 @@
   "version": "0.1.5",
   "description": "Native messaging bridge for browser-controller CLI",
   "background": {
-    "service_worker": "background.js",
-    "scripts": [
-      "background.js"
-    ]
+    "service_worker": "background.js"
   },
   "permissions": [
+    "alarms",
     "nativeMessaging",
+    "offscreen",
     "scripting",
     "downloads",
     "tabs",

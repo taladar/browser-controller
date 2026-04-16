@@ -5,8 +5,8 @@
  * handles commands forwarded by the mediator to control windows and tabs.
  *
  * Supports Firefox (121+) and Chrome/Chromium-based browsers. Firefox-only
- * features (title prefix, sessions API, tab warmup) are guarded by `isFirefox`
- * and degrade to no-ops on Chrome.
+ * features (title prefix, sessions API, containers, reader mode, tab warmup)
+ * are guarded by `isFirefox` and return errors on Chrome.
  *
  * Protocol (mediator → extension):
  *   Length-prefixed JSON messages, each a CliRequest:
@@ -40,20 +40,36 @@ const NATIVE_HOST = "browser_controller";
 const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
 
+/** Name of the Chrome alarm used to reconnect after service worker termination. */
+const RECONNECT_ALARM_NAME = "browser-controller-reconnect";
+
 /** Tabs currently awaiting basic HTTP authentication (tracked via webRequest). */
 const pendingAuthTabs = new Set();
 
 /**
  * Pending credentials for tabs opened with username/password.
  *
- * Maps URL origin (e.g. `"https://example.com"`) → `{ username, password }`.
- * Keyed by origin rather than tab ID because the 401 challenge may fire
+ * Maps `"origin\tcookieStoreId"` → `{ username, password }`.
+ * Keyed by origin + cookie store ID so that tabs in different containers
+ * opening the same origin with different credentials don't clash.
+ * The `cookieStoreId` part is the empty string for the default container.
+ *
+ * Keyed by origin (rather than tab ID) because the 401 challenge may fire
  * during `tabs.create()` before the tab ID is known. The `onAuthRequired`
- * listener matches on the request URL's origin, provides the credentials,
- * and removes the entry so the browser's built-in credential cache takes
- * over for subsequent requests.
+ * listener looks up the tab's cookie store ID and matches on the composite
+ * key.
  */
 const pendingCredentials = new Map();
+
+/**
+ * Build the pendingCredentials map key for an origin and cookie store ID.
+ * @param {string} origin - URL origin (e.g. `"https://example.com"`)
+ * @param {string|null} cookieStoreId - Container cookie store ID, or null/undefined for default.
+ * @returns {string}
+ */
+function credentialKey(origin, cookieStoreId) {
+  return `${origin}\t${cookieStoreId ?? ""}`;
+}
 
 
 /** Active port to the native messaging host (null when disconnected). */
@@ -85,19 +101,35 @@ browser.windows.onCreated.addListener(async (win) => {
 });
 
 browser.webRequest.onAuthRequired.addListener(
-  (details) => {
+  async (details) => {
     if (details.tabId >= 0) {
       pendingAuthTabs.add(details.tabId);
     }
 
-    // Match pending credentials by the request URL's origin.
+    // Match pending credentials by the request URL's origin and the tab's
+    // cookie store ID (container). This allows different credentials for
+    // the same origin in different containers.
     // Do NOT delete the entry here — multiple requests to the same origin
     // (main page, favicon, subresources) may each trigger a 401 during the
     // initial page load. The entry is cleaned up by cmdOpenTab after the
     // tab finishes loading.
     try {
       const origin = new URL(details.url).origin;
-      const creds = pendingCredentials.get(origin);
+      let storeId = "";
+      if (details.tabId >= 0) {
+        try {
+          const tab = await browser.tabs.get(details.tabId);
+          storeId = tab.cookieStoreId ?? "";
+        } catch {
+          // Tab may not exist yet or be inaccessible; use default key.
+        }
+      }
+      const creds = pendingCredentials.get(credentialKey(origin, storeId))
+        // Fall back to the "no container specified" key. This handles the
+        // common case where OpenTab was called without --container, storing
+        // with an empty cookieStoreId, but the browser assigns a default
+        // store like "firefox-default".
+        ?? pendingCredentials.get(credentialKey(origin, null));
       if (creds) {
         return { authCredentials: creds };
       }
@@ -176,6 +208,7 @@ browser.tabs.onCreated.addListener((tab) => {
 });
 
 browser.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  pendingAuthTabs.delete(tabId);
   pushEvent({
     type: "TabClosed",
     tab_id: tabId,
@@ -268,9 +301,21 @@ async function fetchBrowserInfo() {
   }
   const ua = navigator.userAgent;
   const chromeVersion = ua.match(/Chrome\/([\d.]+)/)?.[1] ?? "unknown";
+  // Brave deliberately mimics Chrome's UA string but exposes navigator.brave.
+  if (navigator.brave && typeof navigator.brave.isBrave === "function") {
+    return { name: "Brave", vendor: "Brave Software", version: chromeVersion };
+  }
   if (ua.includes("Edg/")) {
     const edgeVersion = ua.match(/Edg\/([\d.]+)/)?.[1] ?? chromeVersion;
     return { name: "Edge", vendor: "Microsoft", version: edgeVersion };
+  }
+  if (ua.includes("OPR/")) {
+    const operaVersion = ua.match(/OPR\/([\d.]+)/)?.[1] ?? chromeVersion;
+    return { name: "Opera", vendor: "Opera Software", version: operaVersion };
+  }
+  if (ua.includes("Vivaldi/")) {
+    const vivaldiVersion = ua.match(/Vivaldi\/([\d.]+)/)?.[1] ?? chromeVersion;
+    return { name: "Vivaldi", vendor: "Vivaldi Technologies", version: vivaldiVersion };
   }
   return { name: "Chrome", vendor: "Google", version: chromeVersion };
 }
@@ -311,14 +356,33 @@ function connect() {
     console.warn(
       `[browser-controller] Disconnected from mediator${err ? ": " + err.message : ""}. Reconnecting in ${reconnectDelayMs}ms.`,
     );
-    setTimeout(() => {
-      reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
-      connect();
-    }, reconnectDelayMs);
+    if (!isFirefox && chrome.alarms) {
+      // On Chrome, use chrome.alarms instead of setTimeout. Alarms persist
+      // across service worker restarts, so if Chrome kills the worker before
+      // the timeout fires, the alarm will wake it back up.
+      const delayMinutes = Math.max(reconnectDelayMs / 60_000, 0.1);
+      chrome.alarms.create(RECONNECT_ALARM_NAME, { delayInMinutes: delayMinutes });
+    } else {
+      // Firefox: setTimeout is fine — background scripts are persistent.
+      setTimeout(() => {
+        reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
+        connect();
+      }, reconnectDelayMs);
+    }
   });
 
   // Reset backoff on successful connection (assumed when first message arrives).
   reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
+
+  // Clear any pending reconnect alarm now that we're connected.
+  if (!isFirefox && chrome.alarms) {
+    chrome.alarms.clear(RECONNECT_ALARM_NAME);
+  }
+
+  // Ensure the offscreen keepalive document is running (Chrome only).
+  if (!isFirefox) {
+    ensureOffscreenDocument();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -475,12 +539,13 @@ async function dispatch(commandType, params) {
 
 /** Returns a BrowserInfo-shaped CliResult. */
 async function cmdGetBrowserInfo() {
-  const info = await browser.runtime.getBrowserInfo();
+  const info = await fetchBrowserInfo();
   // pid is the browser's PID; we don't have direct access from the extension,
   // so the mediator fills this in — return 0 as a sentinel.
   return {
     type: "BrowserInfo",
     browser_name: info.name,
+    browser_vendor: info.vendor ?? null,
     browser_version: info.version,
     pid: 0,
   };
@@ -519,12 +584,15 @@ async function cmdListWindows() {
  * @param {boolean} incognito - Whether to open the window in private/incognito mode.
  */
 async function cmdOpenWindow(titlePrefix, incognito) {
+  if (titlePrefix !== null && !isFirefox) {
+    throw new Error("Window title prefix is only supported on Firefox");
+  }
   const createProps = {};
   if (incognito) {
     createProps.incognito = true;
   }
   const win = await browser.windows.create(createProps);
-  if (isFirefox && titlePrefix !== null) {
+  if (titlePrefix !== null) {
     await browser.windows.update(win.id, { titlePreface: titlePrefix });
     await browser.sessions.setWindowValue(win.id, "titlePreface", titlePrefix);
   }
@@ -539,7 +607,7 @@ async function cmdCloseWindow(windowId) {
 
 /** Sets the titlePreface (Firefox title prefix) for a window. */
 async function cmdSetWindowTitlePrefix(windowId, prefix) {
-  if (!isFirefox) return { type: "Unit" };
+  if (!isFirefox) throw new Error("SetWindowTitlePrefix is only supported on Firefox");
   await browser.windows.update(windowId, { titlePreface: prefix });
   await browser.sessions.setWindowValue(windowId, "titlePreface", prefix);
   return { type: "Unit" };
@@ -547,7 +615,7 @@ async function cmdSetWindowTitlePrefix(windowId, prefix) {
 
 /** Removes the titlePreface from a window. */
 async function cmdRemoveWindowTitlePrefix(windowId) {
-  if (!isFirefox) return { type: "Unit" };
+  if (!isFirefox) throw new Error("RemoveWindowTitlePrefix is only supported on Firefox");
   await browser.windows.update(windowId, { titlePreface: "" });
   await browser.sessions.removeWindowValue(windowId, "titlePreface");
   return { type: "Unit" };
@@ -598,6 +666,7 @@ async function waitForTabComplete(tabId) {
 async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, username, password, background, cookieStoreId) {
   const createProps = { windowId, active: !background };
   if (cookieStoreId !== null) {
+    if (!isFirefox) throw new Error("Opening a tab in a container is only supported on Firefox");
     createProps.cookieStoreId = cookieStoreId;
   }
   if (insertBeforeTabId !== null) {
@@ -617,8 +686,9 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, us
     parsed.username = "";
     parsed.password = "";
     cleanUrl = parsed.href;
-    // Store by origin so onAuthRequired can match before we know the tab ID.
-    pendingCredentials.set(parsed.origin, { username, password });
+    // Store by origin + cookieStoreId so onAuthRequired can match before we
+    // know the tab ID, while allowing different credentials per container.
+    pendingCredentials.set(credentialKey(parsed.origin, cookieStoreId), { username, password });
   }
 
   if (cleanUrl !== null) {
@@ -650,10 +720,10 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, us
   // for the page to finish loading — the auth exchange happens
   // asynchronously and some pages never reach "complete" status.
   if (url !== null && username !== null && password !== null) {
-    const origin = new URL(url).origin;
+    const key = credentialKey(new URL(url).origin, cookieStoreId);
     // Clean up after 30 s — by then the auth exchange has either
     // succeeded or the user has dismissed the prompt.
-    setTimeout(() => { pendingCredentials.delete(origin); }, 30_000);
+    setTimeout(() => { pendingCredentials.delete(key); }, 30_000);
   }
 
   return { type: "Tab", ...await serializeTabDetails(tab) };
@@ -679,9 +749,8 @@ async function cmdUnpinTab(tabId) {
 
 /** Toggles Reader Mode for a tab (Firefox-only). */
 async function cmdToggleReaderMode(tabId) {
-  if (browser.tabs.toggleReaderMode) {
-    await browser.tabs.toggleReaderMode(tabId);
-  }
+  if (!isFirefox) throw new Error("ToggleReaderMode is only supported on Firefox");
+  await browser.tabs.toggleReaderMode(tabId);
   const tab = await browser.tabs.get(tabId);
   return { type: "Tab", ...await serializeTabDetails(tab) };
 }
@@ -694,9 +763,8 @@ async function cmdDiscardTab(tabId) {
 
 /** Warms up a discarded tab, loading its content into memory without activating it. */
 async function cmdWarmupTab(tabId) {
-  if (browser.tabs.warmup) {
-    await browser.tabs.warmup(tabId);
-  }
+  if (!isFirefox) throw new Error("WarmupTab is only supported on Firefox");
+  await browser.tabs.warmup(tabId);
   const tab = await browser.tabs.get(tabId);
   return { type: "Tab", ...await serializeTabDetails(tab) };
 }
@@ -968,9 +1036,7 @@ async function cmdEraseAllDownloads(state) {
 
 /** List all Firefox containers (contextual identities). */
 async function cmdListContainers() {
-  if (!isFirefox || !browser.contextualIdentities) {
-    return { type: "Containers", containers: [] };
-  }
+  if (!isFirefox) throw new Error("ListContainers is only supported on Firefox");
   const identities = await browser.contextualIdentities.query({});
   return {
     type: "Containers",
@@ -986,6 +1052,7 @@ async function cmdListContainers() {
 
 /** Close a tab and reopen its URL in a different container. */
 async function cmdReopenTabInContainer(tabId, cookieStoreId) {
+  if (!isFirefox) throw new Error("ReopenTabInContainer is only supported on Firefox");
   const tab = await browser.tabs.get(tabId);
   const url = tab.url;
   const windowId = tab.windowId;
@@ -1247,6 +1314,63 @@ async function restoreTitlePrefaces() {
       await browser.windows.update(win.id, { titlePreface: prefix });
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Chrome service worker keepalive
+// ---------------------------------------------------------------------------
+
+/**
+ * Ensure the offscreen keepalive document is running (Chrome only).
+ *
+ * Chrome MV3 can terminate service workers after 30 seconds of inactivity.
+ * The offscreen document sends a periodic keepalive message that resets the
+ * idle timer, preventing termination while the native messaging connection
+ * is active.
+ */
+async function ensureOffscreenDocument() {
+  if (isFirefox || typeof chrome === "undefined" || !chrome.offscreen) return;
+  try {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: ["OFFSCREEN_DOCUMENT"],
+    });
+    if (contexts.length === 0) {
+      await chrome.offscreen.createDocument({
+        url: "offscreen.html",
+        reasons: ["BLOBS"],
+        justification: "Keep service worker alive for native messaging connection",
+      });
+      console.info("[browser-controller] Offscreen keepalive document created.");
+    }
+  } catch (err) {
+    console.warn("[browser-controller] Failed to create offscreen document", {
+      error: String(err),
+      stack: err?.stack,
+    });
+  }
+}
+
+// Handle keepalive messages from the offscreen document. Just receiving
+// the message resets the service worker's idle timer — no action needed.
+if (!isFirefox) {
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === "keepalive") return;
+  });
+}
+
+// Chrome alarms-based reconnect safety net. If the service worker is
+// terminated despite the offscreen keepalive (known Chrome bugs), the
+// alarm wakes it back up and re-establishes the native messaging connection.
+if (!isFirefox && typeof chrome !== "undefined" && chrome.alarms) {
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === RECONNECT_ALARM_NAME) {
+      console.info("[browser-controller] Alarm-based reconnect triggered.");
+      if (nativePort === null) {
+        reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
+        connect();
+      }
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

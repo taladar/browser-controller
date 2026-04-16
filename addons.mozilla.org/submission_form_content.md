@@ -17,24 +17,37 @@ compositor shortcuts, system services or timed jobs.
 For ease of scripting the output can optionally use JSON and the event stream of
 browser events uses newline delimited JSON objects.
 
-Currently, as of 0.1.5 it allows listing, opening and closing windows as well as
-setting and removing a window title prefix that can be used to e.g. distinguish
-different Firefox windows from each other if you want your window system rules
-to always move one to your left screen and the other to your right screen or
-want to open work tabs in a specific window and personal tabs in another.
+For windows it allows listing, opening (including private/incognito windows) and
+closing windows as well as setting and removing a window title prefix
+that can be
+used to e.g. distinguish different Firefox windows from each other if you want
+your window system rules to always move one to your left screen and the other to
+your right screen or want to open work tabs in a specific window and personal
+tabs in another.
 
 For tabs it allows listing, opening, activating, navigating to a new URL,
-closing, pinning, unpinning, warming discarded tabs up, muting and unmuting tab
-audio, moving the tab to a different position in the window's tab bar and going
-forward and backward in history.
+closing, reloading (with optional cache bypass), pinning, unpinning, toggling
+Reader Mode, discarding tabs to free memory, warming discarded tabs up, muting
+and unmuting tab audio, moving the tab to a different position in the window's
+tab bar, going forward and backward in history, sorting tabs by domain, and
+reopening tabs in a different Firefox container.
 
-When opening a new tab it can also optionally remove credentials embedded in the
-URL of basic auth pages after they have been cached by the browser so they can't
-be seen over the user's shoulder or accidentally copied.
+For containers it allows listing all available Firefox containers (contextual
+identities) and reopening tabs in a specific container.
 
-The event stream includes events for basic window and tab operations like
-opening, closing and activating another tab as well as changes in titles and
-notifications when a page has finished loading.
+For downloads it allows listing (with optional state and query filters),
+starting
+new downloads, cancelling, pausing, resuming, retrying interrupted downloads,
+and erasing download history entries.
+
+When opening a new tab it can also optionally provide credentials for HTTP basic
+authentication via the browser's onAuthRequired API, avoiding the need to embed
+credentials in the URL where they would be visible in the address bar, history,
+and logs.
+
+The event stream includes events for window and tab operations (open, close,
+activate, navigate, title change, status change) as well as download events
+(created, changed, erased).
 
 Note: My primary testing and development platform for this is Linux but I do
 provide binaries for other desktop platforms for the Rust side of this. Bug
