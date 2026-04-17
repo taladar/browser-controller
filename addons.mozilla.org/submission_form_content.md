@@ -25,12 +25,13 @@ your window system rules to always move one to your left screen and the other to
 your right screen or want to open work tabs in a specific window and personal
 tabs in another.
 
-For tabs it allows listing, opening, activating, navigating to a new URL,
-closing, reloading (with optional cache bypass), pinning, unpinning, toggling
-Reader Mode, discarding tabs to free memory, warming discarded tabs up, muting
-and unmuting tab audio, moving the tab to a different position in the window's
-tab bar, going forward and backward in history, sorting tabs by domain, and
-reopening tabs in a different Firefox container.
+For tabs it allows listing, opening (with optional wait-for-load timeout),
+activating, navigating to a new URL, closing, reloading (with optional cache
+bypass), pinning, unpinning, toggling Reader Mode, discarding tabs to free
+memory, warming discarded tabs up, muting and unmuting tab audio, moving the
+tab to a different position in the window's tab bar, going forward and backward
+in history, sorting tabs by domain, and reopening tabs in a different Firefox
+container.
 
 For containers it allows listing all available Firefox containers (contextual
 identities) and reopening tabs in a specific container.
@@ -46,8 +47,9 @@ credentials in the URL where they would be visible in the address bar, history,
 and logs.
 
 The event stream includes events for window and tab operations (open, close,
-activate, navigate, title change, status change) as well as download events
-(created, changed, erased).
+activate, navigate, title change, status change, tab moved, tab
+attached/detached between windows, window focus changed) as well as download
+events (created, changed, erased).
 
 Note: My primary testing and development platform for this is Linux but I do
 provide binaries for other desktop platforms for the Rust side of this. Bug

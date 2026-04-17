@@ -440,7 +440,7 @@ impl std::fmt::Display for TabMatcher {
             parts.push(format!("tab-status={status:?}"));
         }
         if let Some(ref id) = self.tab_cookie_store_id {
-            parts.push(format!("tab-cookie-store-id={:?}", id.0));
+            parts.push(format!("tab-cookie-store-id={:?}", id.as_str()));
         }
         if let Some(ref name) = self.tab_container_name {
             parts.push(format!("tab-container-name={name:?}"));

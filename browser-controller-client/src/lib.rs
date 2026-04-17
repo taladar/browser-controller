@@ -26,8 +26,10 @@
 // ExtensionMessage) are deliberately excluded.
 pub use browser_controller_types::{
     BrowserEvent, BrowserInfo, CliResult, ContainerInfo, CookieStoreId, DownloadId, DownloadItem,
-    DownloadState, FilenameConflictAction, Password, TabDetails, TabId, TabStatus, TabSummary,
-    WindowId, WindowState, WindowSummary,
+    DownloadState, FilenameConflictAction, InvalidCookieStoreId, InvalidDownloadId,
+    InvalidTabGroupId, InvalidTabId, InvalidWindowId, Password, TabDetails, TabGroupColor,
+    TabGroupId, TabGroupInfo, TabId, TabStatus, TabSummary, WindowId, WindowState, WindowSummary,
+    WindowType,
 };
 
 mod client;

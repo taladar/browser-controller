@@ -13,6 +13,7 @@
     "scripting",
     "downloads",
     "tabs",
+    "tabGroups",
     "webRequest",
     "webRequestAuthProvider"
   ],

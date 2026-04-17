@@ -89,20 +89,26 @@ async fn auth_credentials_body(h: &Harness) {
         .expect("OpenTab with credentials should succeed");
     let tab_id = tab.id;
 
-    // Wait for the auth exchange and page load to complete
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-    // 1. Verify the page loaded successfully via ListTabs
-    let tabs = h
-        .client()
-        .list_tabs(window_id)
-        .await
-        .expect("ListTabs should succeed");
-
-    let tab = tabs
-        .iter()
-        .find(|t| t.id == tab_id)
-        .expect("opened tab should exist in ListTabs");
+    // Wait for the auth exchange and page load to complete.
+    // Chrome may need more time than Firefox for the 401 → credentials → retry cycle.
+    let mut tab = None;
+    for _ in 0..10u8 {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let tabs = h
+            .client()
+            .list_tabs(window_id)
+            .await
+            .expect("ListTabs should succeed");
+        let found = tabs.into_iter().find(|t| t.id == tab_id);
+        if let Some(ref t) = found
+            && t.title.contains("Auth Page")
+        {
+            tab = found;
+            break;
+        }
+        tab = found;
+    }
+    let tab = tab.expect("opened tab should exist in ListTabs");
 
     // URL should not contain credentials
     assert!(
@@ -135,12 +141,6 @@ async fn auth_credentials_body(h: &Harness) {
         !stdout.contains("testpass"),
         "CLI tabs list output should not contain password",
     );
-
-    // Cleanup
-    h.client()
-        .close_tab(tab_id)
-        .await
-        .expect("CloseTab should succeed");
 }
 
 #[tokio::test]

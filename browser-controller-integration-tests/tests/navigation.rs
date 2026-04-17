@@ -126,12 +126,6 @@ async fn go_back_forward_body(h: &Harness) {
         "tab should be on /page2 after GoForward, got {}",
         tab.url,
     );
-
-    // Cleanup
-    h.client()
-        .close_tab(tab_id)
-        .await
-        .expect("CloseTab should succeed");
 }
 
 #[tokio::test]

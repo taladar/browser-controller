@@ -73,7 +73,7 @@ async fn open_blank_tab(h: &Harness, window_id: WindowId) -> TabId {
 async fn open_tab_before_body(h: &Harness) {
     let server = test_server::Server::start_plain();
     let wid = first_window_id(h).await;
-    let tab1 = open_blank_tab(h, wid).await;
+    let _tab1 = open_blank_tab(h, wid).await;
     let tab2 = open_blank_tab(h, wid).await;
 
     // Get tab2's current index
@@ -99,7 +99,7 @@ async fn open_tab_before_body(h: &Harness) {
     .await;
 
     let result: CliResult = serde_json::from_str(stdout.trim()).expect("parse");
-    let new_tab_id = match result {
+    let _new_tab_id = match result {
         CliResult::Tab(d) => {
             pretty_assertions::assert_eq!(
                 d.index,
@@ -110,10 +110,6 @@ async fn open_tab_before_body(h: &Harness) {
         }
         other => panic!("expected Tab, got {other:?}"),
     };
-
-    h.client().close_tab(new_tab_id).await.expect("cleanup");
-    h.client().close_tab(tab2).await.expect("cleanup");
-    h.client().close_tab(tab1).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -163,20 +159,16 @@ async fn open_tab_after_body(h: &Harness) {
     .await;
 
     let result: CliResult = serde_json::from_str(stdout.trim()).expect("parse");
-    let new_tab_id = match result {
+    match result {
         CliResult::Tab(d) => {
             pretty_assertions::assert_eq!(
                 d.index,
                 tab1_index + 1,
                 "new tab should be right after tab1",
             );
-            d.id
         }
         other => panic!("expected Tab, got {other:?}"),
     };
-
-    h.client().close_tab(new_tab_id).await.expect("cleanup");
-    h.client().close_tab(tab1).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -220,7 +212,7 @@ async fn open_tab_background_body(h: &Harness) {
     .await;
 
     let result: CliResult = serde_json::from_str(stdout.trim()).expect("parse");
-    let new_tab_id = match result {
+    let _new_tab_id = match result {
         CliResult::Tab(d) => d.id,
         other => panic!("expected Tab, got {other:?}"),
     };
@@ -236,8 +228,6 @@ async fn open_tab_background_body(h: &Harness) {
         active_tab_id,
         "original tab should still be active after --background open",
     );
-
-    h.client().close_tab(new_tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]

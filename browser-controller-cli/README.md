@@ -82,6 +82,13 @@ browser-controller install-manifest --browser chrome --extension-id <id>
 | `downloads clear` | Clear all downloads from history |
 | **Containers** | |
 | `containers list` | List all Firefox containers (Firefox-only) |
+| **Tab Groups** | |
+| `tab-groups list` | List all tab groups, optionally filtered by window (Chrome-only) |
+| `tab-groups get` | Get a single tab group by ID (Chrome-only) |
+| `tab-groups update` | Update a tab group's title, color, or collapsed state (Chrome-only) |
+| `tab-groups move` | Move a tab group to a new position (Chrome-only) |
+| `tab-groups group` | Add tabs to a group, creating a new group if needed (Chrome-only) |
+| `tab-groups ungroup` | Remove tabs from their tab groups (Chrome-only) |
 | **Setup & Tools** | |
 | `install-manifest` | Install the native messaging host manifest |
 | `load-extension` | Load/reload a temporary extension via Firefox RDP (development only) |

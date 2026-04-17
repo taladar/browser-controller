@@ -310,30 +310,7 @@ impl CliWindowMatcher {
 impl TryFrom<CliWindowMatcher> for browser_controller_client::WindowMatcher {
     type Error = Error;
     fn try_from(m: CliWindowMatcher) -> Result<Self, Self::Error> {
-        let mut b = Self::builder();
-        if let Some(v) = m.window_id {
-            b.window_id(v);
-        }
-        if let Some(v) = m.window_title {
-            b.window_title(v);
-        }
-        if let Some(v) = m.window_title_prefix {
-            b.window_title_prefix(v);
-        }
-        if let Some(v) = m.window_title_regex {
-            b.window_title_regex(v);
-        }
-        if let Some(v) = bool_pair_to_condition(m.window_focused, m.window_not_focused) {
-            b.window_focused(v);
-        }
-        if let Some(v) = bool_pair_to_condition(m.window_last_focused, m.window_not_last_focused) {
-            b.window_last_focused(v);
-        }
-        if let Some(v) = m.window_state {
-            b.window_state(WindowState::from(v));
-        }
-        b.if_matches_multiple(m.if_matches_multiple_windows.into());
-        Ok(b.build()?)
+        Self::try_from(&m)
     }
 }
 
@@ -514,60 +491,7 @@ impl CliTabMatcher {
 impl TryFrom<CliTabMatcher> for browser_controller_client::TabMatcher {
     type Error = Error;
     fn try_from(m: CliTabMatcher) -> Result<Self, Self::Error> {
-        let mut b = Self::builder();
-        if let Some(v) = m.tab_id {
-            b.tab_id(v);
-        }
-        if let Some(v) = m.tab_title {
-            b.tab_title(v);
-        }
-        if let Some(v) = m.tab_title_regex {
-            b.tab_title_regex(v);
-        }
-        if let Some(v) = m.tab_url {
-            b.tab_url(v);
-        }
-        if let Some(v) = m.tab_url_domain {
-            b.tab_url_domain(v);
-        }
-        if let Some(v) = m.tab_url_regex {
-            b.tab_url_regex(v);
-        }
-        set_bool_condition!(b, tab_active, m.tab_active, m.tab_not_active);
-        set_bool_condition!(b, tab_pinned, m.tab_pinned, m.tab_not_pinned);
-        set_bool_condition!(b, tab_discarded, m.tab_discarded, m.tab_not_discarded);
-        set_bool_condition!(b, tab_audible, m.tab_audible, m.tab_not_audible);
-        set_bool_condition!(b, tab_muted, m.tab_muted, m.tab_not_muted);
-        set_bool_condition!(b, tab_incognito, m.tab_incognito, m.tab_not_incognito);
-        set_bool_condition!(
-            b,
-            tab_awaiting_auth,
-            m.tab_awaiting_auth,
-            m.tab_not_awaiting_auth
-        );
-        set_bool_condition!(
-            b,
-            tab_in_reader_mode,
-            m.tab_in_reader_mode,
-            m.tab_not_in_reader_mode
-        );
-        set_bool_condition!(
-            b,
-            tab_has_attention,
-            m.tab_has_attention,
-            m.tab_does_not_have_attention
-        );
-        if let Some(v) = m.tab_status {
-            b.tab_status(TabStatus::from(v));
-        }
-        if let Some(v) = m.tab_cookie_store_id {
-            b.tab_cookie_store_id(v);
-        }
-        if let Some(v) = m.tab_container_name {
-            b.tab_container_name(v);
-        }
-        b.if_matches_multiple(m.if_matches_multiple_tabs.into());
-        Ok(b.build()?)
+        Self::try_from(&m)
     }
 }
 
@@ -701,6 +625,8 @@ pub enum Command {
     Downloads(DownloadsArgs),
     /// Manage Firefox containers (contextual identities). Firefox-only.
     Containers(ContainersArgs),
+    /// Manage Chrome tab groups. Chrome-only.
+    TabGroups(TabGroupsArgs),
     /// Generate a man page for this tool.
     GenerateManpage {
         /// Directory in which to write the generated man page.
@@ -877,8 +803,6 @@ pub enum TabsCommand {
         background: bool,
         /// Only open the tab if no existing tab in any window has a URL matching `--url`.
         ///
-        /// The comparison strips `user:password@` credentials from both sides before comparing,
-        /// so a tab previously opened with `--username` is still considered a match.
         /// If a matching tab already exists the command succeeds silently without opening a new tab.
         /// Requires `--url`.
         #[clap(long, requires = "url")]
@@ -889,6 +813,12 @@ pub enum TabsCommand {
         /// E.g. `firefox-container-1`. Use `containers list` to see available containers.
         #[clap(long)]
         container: Option<CookieStoreId>,
+        /// Wait for the tab to finish loading before returning, with the given timeout.
+        ///
+        /// If the tab does not reach "complete" status within this time, the
+        /// current tab state is returned. Accepts durations like `30s`, `5m`, `1m30s`.
+        #[clap(long, value_parser = parse_nonzero_duration)]
+        wait_for_load: Option<Duration>,
     },
     /// Activate a tab, making it the focused tab in its window.
     Activate {
@@ -1209,6 +1139,118 @@ pub enum ContainersCommand {
     List,
 }
 
+/// Arguments for the `tab-groups` subcommand group.
+#[derive(clap::Args, Debug)]
+pub struct TabGroupsArgs {
+    /// Tab group operation to perform.
+    #[clap(subcommand)]
+    command: TabGroupsCommand,
+}
+
+/// CLI representation of a tab group color, for use with `--color`.
+///
+/// Mirrors [`browser_controller_client::TabGroupColor`] but derives [`clap::ValueEnum`]
+/// to allow direct CLI parsing.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabGroupColorArg {
+    /// Grey color.
+    Grey,
+    /// Blue color.
+    Blue,
+    /// Red color.
+    Red,
+    /// Yellow color.
+    Yellow,
+    /// Green color.
+    Green,
+    /// Pink color.
+    Pink,
+    /// Purple color.
+    Purple,
+    /// Cyan color.
+    Cyan,
+    /// Orange color.
+    Orange,
+}
+
+impl From<TabGroupColorArg> for browser_controller_client::TabGroupColor {
+    fn from(arg: TabGroupColorArg) -> Self {
+        match arg {
+            TabGroupColorArg::Grey => Self::Grey,
+            TabGroupColorArg::Blue => Self::Blue,
+            TabGroupColorArg::Red => Self::Red,
+            TabGroupColorArg::Yellow => Self::Yellow,
+            TabGroupColorArg::Green => Self::Green,
+            TabGroupColorArg::Pink => Self::Pink,
+            TabGroupColorArg::Purple => Self::Purple,
+            TabGroupColorArg::Cyan => Self::Cyan,
+            TabGroupColorArg::Orange => Self::Orange,
+        }
+    }
+}
+
+/// Operations on Chrome tab groups. Chrome-only.
+#[derive(clap::Subcommand, Debug)]
+pub enum TabGroupsCommand {
+    /// List all tab groups, optionally filtered by window.
+    List {
+        /// Only list groups in this window.
+        #[clap(long)]
+        window_id: Option<WindowId>,
+    },
+    /// Get a single tab group by ID.
+    Get {
+        /// Tab group ID.
+        #[clap(long)]
+        group_id: browser_controller_client::TabGroupId,
+    },
+    /// Update a tab group's properties.
+    Update {
+        /// Tab group ID.
+        #[clap(long)]
+        group_id: browser_controller_client::TabGroupId,
+        /// New title for the group.
+        #[clap(long)]
+        title: Option<String>,
+        /// New color for the group.
+        #[clap(long)]
+        color: Option<TabGroupColorArg>,
+        /// Collapse the group.
+        #[clap(long)]
+        collapsed: bool,
+        /// Expand the group.
+        #[clap(long, conflicts_with = "collapsed")]
+        not_collapsed: bool,
+    },
+    /// Move a tab group to a new position.
+    Move {
+        /// Tab group ID.
+        #[clap(long)]
+        group_id: browser_controller_client::TabGroupId,
+        /// New zero-based index for the group.
+        #[clap(long)]
+        index: u32,
+        /// Move the group to a different window.
+        #[clap(long)]
+        window_id: Option<WindowId>,
+    },
+    /// Add tabs to a tab group, creating a new group if no group ID is given.
+    Group {
+        /// Tab IDs to add to the group.
+        #[clap(long, required = true)]
+        tab_id: Vec<TabId>,
+        /// Existing group to add the tabs to. If omitted, a new group is created.
+        #[clap(long)]
+        group_id: Option<browser_controller_client::TabGroupId>,
+    },
+    /// Remove tabs from their tab groups.
+    Ungroup {
+        /// Tab IDs to ungroup.
+        #[clap(long, required = true)]
+        tab_id: Vec<TabId>,
+    },
+}
+
 /// Serializable view of a discovered instance for JSON output.
 #[derive(Debug, serde::Serialize)]
 struct DiscoveredInstanceJson<'a> {
@@ -1314,10 +1356,24 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
                 } else {
                     ""
                 };
+                let wtype = win
+                    .window_type
+                    .map(|t| format!(", {t}"))
+                    .unwrap_or_default();
+                let incognito = if win.incognito { ", incognito" } else { "" };
+                let geometry = match (win.width, win.height, win.left, win.top) {
+                    (Some(w), Some(h), Some(l), Some(t)) => {
+                        format!(" {w}x{h}+{l}+{t}")
+                    }
+                    _ => String::new(),
+                };
                 println!(
-                    "Window {} — {:?}{}{} [{}]",
-                    win.id, win.title, prefix_display, focused, win.state,
+                    "Window {} \u{2014} {:?}{}{}{}{} [{}]",
+                    win.id, win.title, prefix_display, focused, wtype, incognito, win.state,
                 );
+                if !geometry.is_empty() {
+                    println!("  Geometry:{geometry}");
+                }
                 for tab in &win.tabs {
                     let active = if tab.is_active { "*" } else { " " };
                     println!(
@@ -1365,6 +1421,12 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
                         println!("  Container: {cid}");
                     }
                 }
+                if let Some(opener) = tab.opener_tab_id {
+                    println!("  Opener: {opener}");
+                }
+                if let Some(group) = tab.group_id {
+                    println!("  Group: {group}");
+                }
             }
         }
         CliResult::Tab(tab) => {
@@ -1396,6 +1458,12 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
             );
             if let Some(ref cid) = tab.cookie_store_id {
                 println!("  Container: {cid}");
+            }
+            if let Some(opener) = tab.opener_tab_id {
+                println!("  Opener: {opener}");
+            }
+            if let Some(group) = tab.group_id {
+                println!("  Group: {group}");
             }
         }
         CliResult::Containers { containers } => {
@@ -1439,10 +1507,34 @@ fn print_result_human(result: &CliResult) -> Result<(), Error> {
                     yn(dl.can_resume),
                     yn(dl.incognito),
                 );
+                if let Some(ref danger) = dl.danger
+                    && danger != "safe"
+                {
+                    println!("  Danger:   {danger}");
+                }
+                if let Some(ref eta) = dl.estimated_end_time {
+                    println!("  ETA:      {eta}");
+                }
             }
         }
         CliResult::DownloadId { download_id } => {
             println!("Download {download_id}");
+        }
+        CliResult::TabGroups { tab_groups } => {
+            for tg in tab_groups {
+                let collapsed = if tg.collapsed { ", collapsed" } else { "" };
+                println!(
+                    "Group {} \u{2014} {:?} [{}{}] (window {})",
+                    tg.id, tg.title, tg.color, collapsed, tg.window_id,
+                );
+            }
+        }
+        CliResult::TabGroup(tg) => {
+            let collapsed = if tg.collapsed { ", collapsed" } else { "" };
+            println!(
+                "Group {} \u{2014} {:?} [{}{}] (window {})",
+                tg.id, tg.title, tg.color, collapsed, tg.window_id,
+            );
         }
         CliResult::Unit => {}
         _ => {
@@ -1588,6 +1680,23 @@ async fn stream_events(
         loop {
             match events.next_event().await {
                 Ok(Some(event)) => {
+                    // Print extension errors to stderr as well so they're
+                    // visible even when stdout is piped to another program.
+                    if let browser_controller_client::BrowserEvent::ExtensionError {
+                        ref kind,
+                        ref message,
+                        ref detail,
+                    } = event
+                    {
+                        eprintln!(
+                            "Warning: extension error ({kind}): {message}{}",
+                            if detail.is_empty() {
+                                String::new()
+                            } else {
+                                format!("\n  {detail}")
+                            },
+                        );
+                    }
                     println!("{}", serde_json::to_string(&event)?);
                 }
                 Ok(None) => {
@@ -1725,6 +1834,7 @@ async fn do_stuff() -> Result<(), Error> {
         | Command::Tabs(_)
         | Command::Downloads(_)
         | Command::Containers(_)
+        | Command::TabGroups(_)
         | Command::EventStream { .. } => {}
     }
 
@@ -1822,6 +1932,7 @@ fn validate_flags_for_browser(
         | Command::EventStream { .. }
         | Command::Downloads(_)
         | Command::Containers(_)
+        | Command::TabGroups(_)
         | Command::GenerateManpage { .. }
         | Command::GenerateShellCompletion { .. }
         | Command::InstallManifest { .. }
@@ -1920,6 +2031,7 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 background,
                 if_url_does_not_exist,
                 container,
+                wait_for_load,
             } => {
                 // Guard: skip opening if a tab with the given URL already exists anywhere.
                 if if_url_does_not_exist && let Some(ref check_url) = url {
@@ -1966,6 +2078,11 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                     b.background(background);
                     if let Some(ref v) = container {
                         b.cookie_store_id(v.clone());
+                    }
+                    if let Some(d) = wait_for_load {
+                        b.wait_for_load_timeout_ms(
+                            u32::try_from(d.as_millis()).unwrap_or(u32::MAX),
+                        );
                     }
                     let params = b.build()?;
                     let tab = client.open_tab(params).await?;
@@ -2248,6 +2365,49 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 print_result(&CliResult::Containers { containers }, cli.output)?;
             }
         },
+        Command::TabGroups(tg) => match tg.command {
+            TabGroupsCommand::List { window_id } => {
+                let tab_groups = client.list_tab_groups(window_id).await?;
+                print_result(&CliResult::TabGroups { tab_groups }, cli.output)?;
+            }
+            TabGroupsCommand::Get { group_id } => {
+                let tab_group = client.get_tab_group(group_id).await?;
+                print_result(&CliResult::TabGroup(tab_group), cli.output)?;
+            }
+            TabGroupsCommand::Update {
+                group_id,
+                title,
+                color,
+                collapsed,
+                not_collapsed,
+            } => {
+                let collapsed_opt = match (collapsed, not_collapsed) {
+                    (true, false) => Some(true),
+                    (false, true) => Some(false),
+                    _ => None,
+                };
+                let tab_group = client
+                    .update_tab_group(group_id, title, color.map(Into::into), collapsed_opt)
+                    .await?;
+                print_result(&CliResult::TabGroup(tab_group), cli.output)?;
+            }
+            TabGroupsCommand::Move {
+                group_id,
+                index,
+                window_id,
+            } => {
+                let tab_group = client.move_tab_group(group_id, index, window_id).await?;
+                print_result(&CliResult::TabGroup(tab_group), cli.output)?;
+            }
+            TabGroupsCommand::Group { tab_id, group_id } => {
+                let tab_group = client.group_tabs(tab_id, group_id).await?;
+                print_result(&CliResult::TabGroup(tab_group), cli.output)?;
+            }
+            TabGroupsCommand::Ungroup { tab_id } => {
+                client.ungroup_tabs(tab_id).await?;
+                print_result(&CliResult::Unit, cli.output)?;
+            }
+        },
         // Already handled above.
         Command::Instances
         | Command::EventStream { .. }
@@ -2354,12 +2514,18 @@ mod test {
     /// Build a minimal [`WindowSummary`] for use in tests.
     fn make_window(id: u32, title: &str) -> WindowSummary {
         WindowSummary::new(
-            WindowId(id),
+            WindowId::try_from(id).expect("valid window id"),
             title.to_owned(),
             None,
             false,
             false,
             WindowState::Normal,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
             vec![],
         )
     }
@@ -2379,9 +2545,9 @@ mod test {
         fn new(id: u32, window_id: u32) -> Self {
             Self {
                 inner: TabDetails::new(
-                    TabId(id),
+                    TabId::try_from(id).expect("valid tab id"),
                     0,
-                    WindowId(window_id),
+                    WindowId::try_from(window_id).expect("valid window id"),
                     String::new(),
                     String::new(),
                     false,
@@ -2395,6 +2561,10 @@ mod test {
                     false,
                     false,
                     0,
+                    None,
+                    None,
+                    None,
+                    None,
                     None,
                     None,
                     None,
@@ -2432,10 +2602,13 @@ mod test {
     fn match_windows_by_id() -> Result<(), crate::Error> {
         let windows = vec![make_window(1, "Window One"), make_window(2, "Window Two")];
         let m = browser_controller_client::WindowMatcher::builder()
-            .window_id(WindowId(1))
+            .window_id(WindowId::try_from(1).expect("valid window id"))
             .build()?;
         let matched: Vec<WindowId> = windows.match_with(&m)?.iter().map(|w| w.id).collect();
-        pretty_assertions::assert_eq!(matched, vec![WindowId(1)]);
+        pretty_assertions::assert_eq!(
+            matched,
+            vec![WindowId::try_from(1).expect("valid window id")]
+        );
         Ok(())
     }
 
@@ -2447,7 +2620,10 @@ mod test {
             .window_title("Work")
             .build()?;
         let matched: Vec<WindowId> = windows.match_with(&m)?.iter().map(|w| w.id).collect();
-        pretty_assertions::assert_eq!(matched, vec![WindowId(1)]);
+        pretty_assertions::assert_eq!(
+            matched,
+            vec![WindowId::try_from(1).expect("valid window id")]
+        );
         Ok(())
     }
 
@@ -2459,10 +2635,10 @@ mod test {
             make_tab(11, 1, "Tab B", "https://other.com"),
         ];
         let m = browser_controller_client::TabMatcher::builder()
-            .tab_id(TabId(10))
+            .tab_id(TabId::try_from(10).expect("valid tab id"))
             .build()?;
         let matched: Vec<TabId> = tabs.match_with(&m)?.iter().map(|t| t.id).collect();
-        pretty_assertions::assert_eq!(matched, vec![TabId(10)]);
+        pretty_assertions::assert_eq!(matched, vec![TabId::try_from(10).expect("valid tab id")]);
         Ok(())
     }
 
@@ -2477,7 +2653,7 @@ mod test {
             .tab_title("Dashboard")
             .build()?;
         let matched: Vec<TabId> = tabs.match_with(&m)?.iter().map(|t| t.id).collect();
-        pretty_assertions::assert_eq!(matched, vec![TabId(10)]);
+        pretty_assertions::assert_eq!(matched, vec![TabId::try_from(10).expect("valid tab id")]);
         Ok(())
     }
 }

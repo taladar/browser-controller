@@ -199,14 +199,6 @@ async fn cli_tabs_sort_body(h: &Harness) {
             "wikipedia tab (index {wi}) should come before google tab (index {gi}) after sort",
         );
     }
-
-    // Cleanup: close all test tabs
-    for tab_id in tab_ids {
-        h.client()
-            .close_tab(tab_id)
-            .await
-            .expect("CloseTab should succeed");
-    }
 }
 
 #[tokio::test]

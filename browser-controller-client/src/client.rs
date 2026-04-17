@@ -6,7 +6,7 @@ use std::time::Duration;
 use browser_controller_types::{
     BrowserInfo, CliCommand, CliOutcome, CliRequest, CliResponse, CliResult, ContainerInfo,
     CookieStoreId, DownloadId, DownloadItem, DownloadState, FilenameConflictAction, Password,
-    TabDetails, TabId, WindowId, WindowSummary,
+    TabDetails, TabGroupColor, TabGroupId, TabGroupInfo, TabId, WindowId, WindowSummary,
 };
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
 
@@ -103,6 +103,14 @@ pub struct OpenTabParams {
     /// Firefox container (cookie store) ID.
     #[builder(default)]
     pub(crate) cookie_store_id: Option<CookieStoreId>,
+    /// Optional timeout in milliseconds to wait for the tab to finish loading.
+    ///
+    /// When set, the extension waits for the tab to reach "complete" status,
+    /// up to this timeout. If the timeout elapses, the current tab state is
+    /// returned. When `None`, the tab details are returned immediately after
+    /// creation.
+    #[builder(default)]
+    pub(crate) wait_for_load_timeout_ms: Option<u32>,
 }
 
 impl OpenTabParams {
@@ -316,6 +324,7 @@ impl Client {
                 password: params.password,
                 background: params.background,
                 cookie_store_id: params.cookie_store_id,
+                wait_for_load_timeout_ms: params.wait_for_load_timeout_ms,
             })
             .await?
         {
@@ -652,6 +661,145 @@ impl Client {
     pub async fn erase_all_downloads(&self, state: Option<DownloadState>) -> CmdResult<()> {
         self.execute_unit(CliCommand::EraseAllDownloads { state })
             .await
+    }
+
+    // ------------------------------------------------------------------
+    // Tab groups (Chrome-only)
+    // ------------------------------------------------------------------
+
+    /// List all tab groups, optionally filtered by window.
+    ///
+    /// Chrome-only. Returns an error on browsers without tab group support.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command fails or returns an unexpected response.
+    pub async fn list_tab_groups(
+        &self,
+        window_id: Option<WindowId>,
+    ) -> CmdResult<Vec<TabGroupInfo>> {
+        match self
+            .execute(CliCommand::ListTabGroups { window_id })
+            .await?
+        {
+            CliResult::TabGroups { tab_groups } => Ok(tab_groups),
+            other => Err(CommandError::UnexpectedResponse {
+                expected: "TabGroups",
+                actual: Box::new(other),
+            }),
+        }
+    }
+
+    /// Get a single tab group by ID.
+    ///
+    /// Chrome-only.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command fails or returns an unexpected response.
+    pub async fn get_tab_group(&self, group_id: TabGroupId) -> CmdResult<TabGroupInfo> {
+        match self.execute(CliCommand::GetTabGroup { group_id }).await? {
+            CliResult::TabGroup(info) => Ok(info),
+            other => Err(CommandError::UnexpectedResponse {
+                expected: "TabGroup",
+                actual: Box::new(other),
+            }),
+        }
+    }
+
+    /// Update a tab group's properties.
+    ///
+    /// Chrome-only. All parameters are optional; only non-`None` values are applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command fails or returns an unexpected response.
+    pub async fn update_tab_group(
+        &self,
+        group_id: TabGroupId,
+        title: Option<String>,
+        color: Option<TabGroupColor>,
+        collapsed: Option<bool>,
+    ) -> CmdResult<TabGroupInfo> {
+        match self
+            .execute(CliCommand::UpdateTabGroup {
+                group_id,
+                title,
+                color,
+                collapsed,
+            })
+            .await?
+        {
+            CliResult::TabGroup(info) => Ok(info),
+            other => Err(CommandError::UnexpectedResponse {
+                expected: "TabGroup",
+                actual: Box::new(other),
+            }),
+        }
+    }
+
+    /// Move a tab group to a new position.
+    ///
+    /// Chrome-only.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command fails or returns an unexpected response.
+    pub async fn move_tab_group(
+        &self,
+        group_id: TabGroupId,
+        index: u32,
+        window_id: Option<WindowId>,
+    ) -> CmdResult<TabGroupInfo> {
+        match self
+            .execute(CliCommand::MoveTabGroup {
+                group_id,
+                index,
+                window_id,
+            })
+            .await?
+        {
+            CliResult::TabGroup(info) => Ok(info),
+            other => Err(CommandError::UnexpectedResponse {
+                expected: "TabGroup",
+                actual: Box::new(other),
+            }),
+        }
+    }
+
+    /// Add tabs to a tab group, optionally creating a new group.
+    ///
+    /// Chrome-only. When `group_id` is `None`, a new group is created.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command fails or returns an unexpected response.
+    pub async fn group_tabs(
+        &self,
+        tab_ids: Vec<TabId>,
+        group_id: Option<TabGroupId>,
+    ) -> CmdResult<TabGroupInfo> {
+        match self
+            .execute(CliCommand::GroupTabs { tab_ids, group_id })
+            .await?
+        {
+            CliResult::TabGroup(info) => Ok(info),
+            other => Err(CommandError::UnexpectedResponse {
+                expected: "TabGroup",
+                actual: Box::new(other),
+            }),
+        }
+    }
+
+    /// Remove tabs from their tab groups.
+    ///
+    /// Chrome-only.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command fails or returns an unexpected response.
+    pub async fn ungroup_tabs(&self, tab_ids: Vec<TabId>) -> CmdResult<()> {
+        self.execute_unit(CliCommand::UngroupTabs { tab_ids }).await
     }
 
     // ------------------------------------------------------------------

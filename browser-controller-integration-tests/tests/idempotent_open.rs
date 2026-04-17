@@ -138,12 +138,7 @@ async fn if_title_prefix_does_not_exist_body(h: &Harness, prefix: &str) {
         .await
         .expect("ListWindows should succeed");
     for w in &windows {
-        if w.title_prefix.as_deref() == Some(prefix) {
-            h.client()
-                .close_window(w.id)
-                .await
-                .expect("CloseWindow should succeed");
-        }
+        if w.title_prefix.as_deref() == Some(prefix) {}
     }
 }
 
@@ -237,12 +232,7 @@ async fn if_url_does_not_exist_body(h: &Harness) {
         .await
         .expect("ListTabs should succeed");
     for t in &tabs {
-        if t.url == url {
-            h.client()
-                .close_tab(t.id)
-                .await
-                .expect("CloseTab should succeed");
-        }
+        if t.url == url {}
     }
 }
 

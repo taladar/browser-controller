@@ -28,9 +28,21 @@ impl TestProfile {
     /// # Errors
     ///
     /// Returns an error if the temporary directory cannot be created.
-    pub fn new(_browser: browser::Kind) -> Result<Self, std::io::Error> {
+    pub fn new(browser: browser::Kind) -> Result<Self, std::io::Error> {
         let temp_dir = tempfile::TempDir::with_prefix("browser-controller-test-")?;
         let path = temp_dir.path().to_owned();
+
+        // Chrome requires developer mode to be enabled for unpacked extensions.
+        // Pre-seed the Preferences file so the extension service worker starts.
+        if browser == browser::Kind::Chrome {
+            let default_dir = path.join("Default");
+            fs_err::create_dir_all(&default_dir)?;
+            fs_err::write(
+                default_dir.join("Preferences"),
+                r#"{"extensions":{"ui":{"developer_mode":true}}}"#,
+            )?;
+        }
+
         Ok(Self {
             _temp_dir: temp_dir,
             path,
@@ -61,7 +73,8 @@ pub fn extension_dir() -> Option<PathBuf> {
 
 /// Locate the workspace root by searching upward from the current working
 /// directory for a `Cargo.toml` with `[workspace]`.
-fn find_workspace_root() -> Option<PathBuf> {
+#[must_use]
+pub fn find_workspace_root() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
         let cargo_toml = dir.join("Cargo.toml");
@@ -128,13 +141,12 @@ pub fn verified_extension_dir() -> Option<PathBuf> {
 
 /// A prepared extension directory ready for installation into a specific browser.
 ///
-/// For Firefox, this points directly to the workspace `extension/` directory.
-/// For Chrome, this is a temporary copy with `manifest.chrome.json` renamed to
-/// `manifest.json` (since Chrome cannot use the Firefox manifest which contains
-/// `browser_specific_settings.gecko` and the `sessions` permission).
+/// For Firefox, `path` points directly to the workspace `extension/` directory.
+/// For Chrome, `path` points to a temporary copy with the Chrome manifest and a
+/// `key` field for deterministic extension ID.
 #[derive(Debug)]
 pub struct PreparedExtension {
-    /// Path to the extension directory to install.
+    /// Path to the unpacked extension directory.
     pub path: PathBuf,
     /// Temporary directory holding the Chrome copy (kept alive by this field).
     _temp_dir: Option<tempfile::TempDir>,
@@ -165,11 +177,36 @@ pub fn prepared_extension_dir(browser: browser::Kind) -> Result<PreparedExtensio
 
             // Copy background.js
             fs_err::copy(source_dir.join("background.js"), dest.join("background.js"))?;
-            // Copy manifest.chrome.json as manifest.json
+            // Copy Chrome offscreen document (needed for service worker keepalive)
             fs_err::copy(
-                source_dir.join("manifest.chrome.json"),
-                dest.join("manifest.json"),
+                source_dir.join("offscreen.html"),
+                dest.join("offscreen.html"),
             )?;
+            fs_err::copy(source_dir.join("offscreen.js"), dest.join("offscreen.js"))?;
+            // Copy manifest.chrome.json as manifest.json, injecting a fixed "key"
+            // field so Chrome assigns a deterministic extension ID regardless of
+            // the path the extension is loaded from.
+            let manifest_content = fs_err::read_to_string(source_dir.join("manifest.chrome.json"))?;
+            let mut manifest: serde_json::Value =
+                serde_json::from_str(&manifest_content).map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("invalid manifest JSON: {e}"),
+                    )
+                })?;
+            if let Some(obj) = manifest.as_object_mut() {
+                obj.insert(
+                    "key".to_owned(),
+                    serde_json::Value::String(TEST_CHROME_EXTENSION_KEY.to_owned()),
+                );
+            }
+            let manifest_out = serde_json::to_string_pretty(&manifest).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("manifest serialization failed: {e}"),
+                )
+            })?;
+            fs_err::write(dest.join("manifest.json"), manifest_out)?;
 
             Ok(PreparedExtension {
                 path: dest.to_owned(),
@@ -177,4 +214,60 @@ pub fn prepared_extension_dir(browser: browser::Kind) -> Result<PreparedExtensio
             })
         }
     }
+}
+
+/// RSA public key (DER, base64-encoded) used to give the Chrome test extension a
+/// deterministic ID regardless of the path it is loaded from.
+///
+/// The corresponding extension ID is [`TEST_CHROME_EXTENSION_ID`].
+const TEST_CHROME_EXTENSION_KEY: &str = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAudKxEwE1m/8nloKiVO3Jc/q3q0WS50wy9i9LoatVFf2RuvQuwSokmbZgPicSDRLreICozqNb38s1rxYEuDUsj21ciUKXhIv98aovOru6O5ZLAMM9+qAnFAL94DkbO/IF4t9NDg62aChnnPgScBUQPvbIQdaZxF265aoqkxRG7tDCu2rYdXH0p0LMV8kZdMNyEttqC0QWKZCUgt1iZ9GLNnuJK1TDtB1KOISeAMF39UxgK8a6yAyl1QNabztCnanK2mkBDzO+O5E3BYMgnLCp7JXiJovIm2ZSyQhaPZZBSHEeD7H5bLZi3i2/qY/n8Eq4v5vOomDWbqQ9nCBbFF8gTQIDAQAB";
+
+/// The Chrome extension ID corresponding to [`TEST_CHROME_EXTENSION_KEY`].
+///
+/// Derived from the SHA-256 of the DER-encoded public key, with each nibble
+/// mapped to `a`-`p`.
+pub const TEST_CHROME_EXTENSION_ID: &str = "aicknojbcfnjicbieegnnmecfmeldbhd";
+
+/// Write a native messaging manifest for the test extension into the
+/// Chrome test profile directory.
+///
+/// Chrome for Testing looks for NMH manifests at
+/// `<user-data-dir>/NativeMessagingHosts/<name>.json`, so the manifest
+/// must be inside the test profile (not in `~/.config/`).
+///
+/// # Errors
+///
+/// Returns an error if the manifest cannot be written or the mediator
+/// binary cannot be found.
+pub fn write_chrome_test_nmh_manifest(profile_dir: &std::path::Path) -> Result<(), std::io::Error> {
+    let mediator_path = mediator_binary()
+        .or_else(|| which::which("browser-controller-mediator").ok())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "browser-controller-mediator binary not found",
+            )
+        })?;
+
+    let nmh_dir = profile_dir.join("NativeMessagingHosts");
+    fs_err::create_dir_all(&nmh_dir)?;
+
+    let manifest_content = serde_json::to_string_pretty(&serde_json::json!({
+        "name": "browser_controller",
+        "description": "Browser Controller Mediator",
+        "path": mediator_path.to_string_lossy(),
+        "type": "stdio",
+        "allowed_origins": [
+            format!("chrome-extension://{TEST_CHROME_EXTENSION_ID}/")
+        ]
+    }))
+    .map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("JSON serialization failed: {e}"),
+        )
+    })?;
+
+    fs_err::write(nmh_dir.join("browser_controller.json"), manifest_content)?;
+    Ok(())
 }

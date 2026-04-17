@@ -84,12 +84,6 @@ async fn pin_unpin_body(h: &Harness) {
         !tab.expect("just asserted").is_pinned,
         "tab should not be pinned after UnpinTab",
     );
-
-    // Cleanup
-    h.client()
-        .close_tab(tab_id)
-        .await
-        .expect("CloseTab should succeed");
 }
 
 #[tokio::test]
@@ -136,12 +130,6 @@ async fn mute_unmute_body(h: &Harness) {
         .expect("ListTabs should succeed");
     let tab = tabs.iter().find(|t| t.id == tab_id).expect("tab exists");
     assert!(!tab.is_muted, "tab should not be muted after UnmuteTab");
-
-    // Cleanup
-    h.client()
-        .close_tab(tab_id)
-        .await
-        .expect("CloseTab should succeed");
 }
 
 #[tokio::test]
@@ -187,16 +175,6 @@ async fn activate_tab_body(h: &Harness) {
         !t2.expect("just asserted").is_active,
         "tab2 should not be active after activating tab1",
     );
-
-    // Cleanup
-    h.client()
-        .close_tab(tab2)
-        .await
-        .expect("CloseTab should succeed");
-    h.client()
-        .close_tab(tab1)
-        .await
-        .expect("CloseTab should succeed");
 }
 
 #[tokio::test]
@@ -214,7 +192,7 @@ async fn move_tab_body(h: &Harness) {
     let window_id = first_window_id(h).await;
 
     // Open two extra tabs so we have something to reorder
-    let tab1 = open_test_tab(h, window_id).await;
+    let _tab1 = open_test_tab(h, window_id).await;
     let tab2 = open_test_tab(h, window_id).await;
 
     // Get tab2's current index
@@ -242,16 +220,6 @@ async fn move_tab_body(h: &Harness) {
         .move_tab(tab2, tab2_index)
         .await
         .expect("MoveTab back should succeed");
-
-    // Cleanup
-    h.client()
-        .close_tab(tab2)
-        .await
-        .expect("CloseTab should succeed");
-    h.client()
-        .close_tab(tab1)
-        .await
-        .expect("CloseTab should succeed");
 }
 
 #[tokio::test]
@@ -309,17 +277,21 @@ async fn discard_warmup_body(h: &Harness) {
     let tab = tabs.iter().find(|t| t.id == tab_id).expect("tab exists");
     assert!(tab.is_discarded, "tab should be discarded after DiscardTab");
 
-    // Warm up the tab (Firefox-only, no-op on Chrome)
-    h.client()
-        .warmup_tab(tab_id)
-        .await
-        .expect("WarmupTab should succeed");
-
-    // Cleanup
-    h.client()
-        .close_tab(tab_id)
-        .await
-        .expect("CloseTab should succeed");
+    // Warm up the tab (Firefox-only; returns an error on Chrome)
+    match h.browser {
+        browser::Kind::Firefox => {
+            h.client()
+                .warmup_tab(tab_id)
+                .await
+                .expect("WarmupTab should succeed on Firefox");
+        }
+        browser::Kind::Chrome => {
+            assert!(
+                h.client().warmup_tab(tab_id).await.is_err(),
+                "WarmupTab should fail on Chrome",
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -384,12 +356,6 @@ async fn reload_tab_body(h: &Harness) {
         "URL should still be the test server after force reload, got {}",
         tab.url,
     );
-
-    // Cleanup
-    h.client()
-        .close_tab(tab_id)
-        .await
-        .expect("CloseTab should succeed");
 }
 
 #[tokio::test]

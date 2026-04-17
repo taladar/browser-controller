@@ -74,10 +74,12 @@ async fn open_close_window_body(h: &Harness) {
         "window count should increase by 1 after OpenWindow",
     );
 
-    // If niri is available, verify new window appears
+    // If niri is available, verify new window appears.
+    // Wait briefly for the compositor to register the new window.
     if browser_controller_integration_tests::niri::is_available()
         && let Some(pid) = h.browser_pid
     {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let count = browser_controller_integration_tests::niri::count_windows_for_pid(pid)
             .expect("niri window count should succeed");
         assert!(

@@ -9,6 +9,7 @@
 
 pub mod bidi;
 pub mod browser;
+pub mod chrome_for_testing;
 pub mod cli;
 pub mod driver;
 pub mod harness;

@@ -126,10 +126,10 @@ async fn event_stream_downloads_only_body(h: &Harness) {
     );
 
     // Cleanup
-    if tab_id > TabId(0) {
+    if tab_id.as_u32() > 0 {
         drop(h.client().close_tab(tab_id).await);
     }
-    if download_id > DownloadId(0) {
+    if download_id.as_u32() > 0 {
         drop(h.client().erase_download(download_id).await);
     }
 }
@@ -179,10 +179,10 @@ async fn event_stream_windows_tabs_only_body(h: &Harness) {
     );
 
     // Cleanup
-    if tab_id > TabId(0) {
+    if tab_id.as_u32() > 0 {
         drop(h.client().close_tab(tab_id).await);
     }
-    if download_id > DownloadId(0) {
+    if download_id.as_u32() > 0 {
         drop(h.client().erase_download(download_id).await);
     }
 }

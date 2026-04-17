@@ -2,10 +2,19 @@
 //!
 //! This crate defines the data types used in communication between:
 //! - The CLI and the mediator (over Unix Domain Socket, newline-delimited JSON)
-//! - The mediator and the Firefox extension (via native messaging, length-prefixed JSON)
+//! - The mediator and the browser extension (via native messaging, length-prefixed JSON)
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
+
+/// Error type for invalid [`WindowId`] values.
+///
+/// Currently empty — all `u32` values are accepted. The `#[non_exhaustive]`
+/// attribute allows adding validation variants in the future without a
+/// semver-breaking change.
+#[non_exhaustive]
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum InvalidWindowId {}
 
 /// Browser-assigned window identifier.
 ///
@@ -13,7 +22,26 @@ use zeroize::Zeroizing;
 /// tab or download IDs where a window ID is expected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct WindowId(pub u32);
+pub struct WindowId(u32);
+
+impl WindowId {
+    /// Returns the underlying `u32` value.
+    #[must_use]
+    pub const fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+
+#[expect(
+    clippy::infallible_try_from,
+    reason = "error type is intentionally empty now but #[non_exhaustive] to allow adding validation later without a semver break"
+)]
+impl TryFrom<u32> for WindowId {
+    type Error = InvalidWindowId;
+    fn try_from(v: u32) -> Result<Self, Self::Error> {
+        Ok(Self(v))
+    }
+}
 
 impl std::fmt::Display for WindowId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -28,13 +56,41 @@ impl std::str::FromStr for WindowId {
     }
 }
 
+/// Error type for invalid [`TabId`] values.
+///
+/// Currently empty — all `u32` values are accepted. The `#[non_exhaustive]`
+/// attribute allows adding validation variants in the future without a
+/// semver-breaking change.
+#[non_exhaustive]
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum InvalidTabId {}
+
 /// Browser-assigned tab identifier.
 ///
 /// A lightweight newtype around `u32` that prevents accidental misuse of
 /// window or download IDs where a tab ID is expected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct TabId(pub u32);
+pub struct TabId(u32);
+
+impl TabId {
+    /// Returns the underlying `u32` value.
+    #[must_use]
+    pub const fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+
+#[expect(
+    clippy::infallible_try_from,
+    reason = "error type is intentionally empty now but #[non_exhaustive] to allow adding validation later without a semver break"
+)]
+impl TryFrom<u32> for TabId {
+    type Error = InvalidTabId;
+    fn try_from(v: u32) -> Result<Self, Self::Error> {
+        Ok(Self(v))
+    }
+}
 
 impl std::fmt::Display for TabId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -49,13 +105,41 @@ impl std::str::FromStr for TabId {
     }
 }
 
+/// Error type for invalid [`DownloadId`] values.
+///
+/// Currently empty — all `u32` values are accepted. The `#[non_exhaustive]`
+/// attribute allows adding validation variants in the future without a
+/// semver-breaking change.
+#[non_exhaustive]
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum InvalidDownloadId {}
+
 /// Browser-assigned download identifier.
 ///
 /// A lightweight newtype around `u32` that prevents accidental misuse of
 /// window or tab IDs where a download ID is expected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct DownloadId(pub u32);
+pub struct DownloadId(u32);
+
+impl DownloadId {
+    /// Returns the underlying `u32` value.
+    #[must_use]
+    pub const fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+
+#[expect(
+    clippy::infallible_try_from,
+    reason = "error type is intentionally empty now but #[non_exhaustive] to allow adding validation later without a semver break"
+)]
+impl TryFrom<u32> for DownloadId {
+    type Error = InvalidDownloadId;
+    fn try_from(v: u32) -> Result<Self, Self::Error> {
+        Ok(Self(v))
+    }
+}
 
 impl std::fmt::Display for DownloadId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -70,6 +154,15 @@ impl std::str::FromStr for DownloadId {
     }
 }
 
+/// Error type for invalid [`CookieStoreId`] values.
+///
+/// Currently empty — all string values are accepted. The `#[non_exhaustive]`
+/// attribute allows adding validation variants in the future without a
+/// semver-breaking change.
+#[non_exhaustive]
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum InvalidCookieStoreId {}
+
 /// Firefox container (cookie store) identifier.
 ///
 /// A lightweight newtype around `String` that prevents accidental misuse of
@@ -77,7 +170,43 @@ impl std::str::FromStr for DownloadId {
 /// Values are typically of the form `"firefox-container-1"`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct CookieStoreId(pub String);
+pub struct CookieStoreId(String);
+
+impl CookieStoreId {
+    /// Returns the underlying string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consumes `self` and returns the inner `String`.
+    #[must_use]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+#[expect(
+    clippy::infallible_try_from,
+    reason = "error type is intentionally empty now but #[non_exhaustive] to allow adding validation later without a semver break"
+)]
+impl TryFrom<String> for CookieStoreId {
+    type Error = InvalidCookieStoreId;
+    fn try_from(v: String) -> Result<Self, Self::Error> {
+        Ok(Self(v))
+    }
+}
+
+#[expect(
+    clippy::infallible_try_from,
+    reason = "error type is intentionally empty now but #[non_exhaustive] to allow adding validation later without a semver break"
+)]
+impl TryFrom<&str> for CookieStoreId {
+    type Error = InvalidCookieStoreId;
+    fn try_from(v: &str) -> Result<Self, Self::Error> {
+        Ok(Self(v.to_owned()))
+    }
+}
 
 impl std::fmt::Display for CookieStoreId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -95,6 +224,56 @@ impl std::str::FromStr for CookieStoreId {
 impl AsRef<str> for CookieStoreId {
     fn as_ref(&self) -> &str {
         &self.0
+    }
+}
+
+/// Error type for invalid [`TabGroupId`] values.
+///
+/// Currently empty — all `u32` values are accepted. The `#[non_exhaustive]`
+/// attribute allows adding validation variants in the future without a
+/// semver-breaking change.
+#[non_exhaustive]
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum InvalidTabGroupId {}
+
+/// Chrome-assigned tab group identifier.
+///
+/// A lightweight newtype around `u32` that prevents accidental misuse of
+/// other IDs where a tab group ID is expected. Chrome-only; Firefox does
+/// not have a tab groups API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TabGroupId(u32);
+
+impl TabGroupId {
+    /// Returns the underlying `u32` value.
+    #[must_use]
+    pub const fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+
+#[expect(
+    clippy::infallible_try_from,
+    reason = "error type is intentionally empty now but #[non_exhaustive] to allow adding validation later without a semver break"
+)]
+impl TryFrom<u32> for TabGroupId {
+    type Error = InvalidTabGroupId;
+    fn try_from(v: u32) -> Result<Self, Self::Error> {
+        Ok(Self(v))
+    }
+}
+
+impl std::fmt::Display for TabGroupId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::str::FromStr for TabGroupId {
+    type Err = std::num::ParseIntError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<u32>().map(Self)
     }
 }
 
@@ -181,8 +360,7 @@ pub struct BrowserInfo {
     pub pid: u32,
     /// The browser profile identifier (directory basename, e.g. `abc123.default-release`).
     ///
-    /// `None` when the profile cannot be determined (non-Linux platforms or if
-    /// the browser was not launched with an explicit `--profile` flag).
+    /// `None` when the profile cannot be determined from the browser's command line.
     #[serde(default)]
     pub profile_id: Option<String>,
 }
@@ -222,6 +400,111 @@ pub enum WindowState {
     Fullscreen,
 }
 
+/// The type of a browser window.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowType {
+    /// A regular browser window.
+    Normal,
+    /// A popup window (e.g. opened via `window.open()`).
+    Popup,
+    /// A panel window (Chrome-only, deprecated).
+    Panel,
+    /// A developer tools window.
+    Devtools,
+}
+
+impl std::fmt::Display for WindowType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Normal => write!(f, "normal"),
+            Self::Popup => write!(f, "popup"),
+            Self::Panel => write!(f, "panel"),
+            Self::Devtools => write!(f, "devtools"),
+        }
+    }
+}
+
+/// The color of a Chrome tab group.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabGroupColor {
+    /// Grey color.
+    Grey,
+    /// Blue color.
+    Blue,
+    /// Red color.
+    Red,
+    /// Yellow color.
+    Yellow,
+    /// Green color.
+    Green,
+    /// Pink color.
+    Pink,
+    /// Purple color.
+    Purple,
+    /// Cyan color.
+    Cyan,
+    /// Orange color.
+    Orange,
+}
+
+impl std::fmt::Display for TabGroupColor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Grey => write!(f, "grey"),
+            Self::Blue => write!(f, "blue"),
+            Self::Red => write!(f, "red"),
+            Self::Yellow => write!(f, "yellow"),
+            Self::Green => write!(f, "green"),
+            Self::Pink => write!(f, "pink"),
+            Self::Purple => write!(f, "purple"),
+            Self::Cyan => write!(f, "cyan"),
+            Self::Orange => write!(f, "orange"),
+        }
+    }
+}
+
+/// Information about a Chrome tab group.
+///
+/// Chrome-only; Firefox does not support tab groups.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabGroupInfo {
+    /// The tab group's unique identifier.
+    pub id: TabGroupId,
+    /// The display title of the group (may be empty).
+    pub title: String,
+    /// The color of the group.
+    pub color: TabGroupColor,
+    /// Whether the group is visually collapsed.
+    pub collapsed: bool,
+    /// The window this group belongs to.
+    pub window_id: WindowId,
+}
+
+impl TabGroupInfo {
+    /// Create a new `TabGroupInfo`.
+    #[must_use]
+    pub const fn new(
+        id: TabGroupId,
+        title: String,
+        color: TabGroupColor,
+        collapsed: bool,
+        window_id: WindowId,
+    ) -> Self {
+        Self {
+            id,
+            title,
+            color,
+            collapsed,
+            window_id,
+        }
+    }
+}
+
 /// A brief summary of a tab, suitable for embedding in window listings.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,10 +529,17 @@ pub struct TabSummary {
     /// Firefox-specific; `None` on browsers that don't support containers.
     #[serde(default)]
     pub container_name: Option<String>,
+    /// Whether this tab is open in a private/incognito window.
+    #[serde(default)]
+    pub incognito: bool,
 }
 
 impl TabSummary {
     /// Create a new `TabSummary`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the browser's tabs.Tab API fields"
+    )]
     #[must_use]
     pub const fn new(
         id: TabId,
@@ -259,6 +549,7 @@ impl TabSummary {
         is_active: bool,
         cookie_store_id: Option<CookieStoreId>,
         container_name: Option<String>,
+        incognito: bool,
     ) -> Self {
         Self {
             id,
@@ -268,6 +559,7 @@ impl TabSummary {
             is_active,
             cookie_store_id,
             container_name,
+            incognito,
         }
     }
 }
@@ -293,12 +585,40 @@ pub struct WindowSummary {
     pub is_last_focused: bool,
     /// The current visual state of the window.
     pub state: WindowState,
+    /// The type of this window (normal, popup, panel, devtools).
+    #[serde(default)]
+    pub window_type: Option<WindowType>,
+    /// Whether this window is in private/incognito mode.
+    #[serde(default)]
+    pub incognito: bool,
+    /// Window width in pixels.
+    #[serde(default)]
+    pub width: Option<u32>,
+    /// Window height in pixels.
+    #[serde(default)]
+    pub height: Option<u32>,
+    /// Left edge of the window in pixels from the screen left.
+    ///
+    /// May be negative on multi-monitor setups where a monitor is to the left
+    /// of the primary monitor's origin.
+    #[serde(default)]
+    pub left: Option<i32>,
+    /// Top edge of the window in pixels from the screen top.
+    ///
+    /// May be negative on multi-monitor setups where a monitor is above the
+    /// primary monitor's origin.
+    #[serde(default)]
+    pub top: Option<i32>,
     /// Brief summaries of the tabs open in this window.
     pub tabs: Vec<TabSummary>,
 }
 
 impl WindowSummary {
     /// Create a new `WindowSummary`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the browser's windows.Window API fields"
+    )]
     #[must_use]
     pub const fn new(
         id: WindowId,
@@ -307,6 +627,12 @@ impl WindowSummary {
         is_focused: bool,
         is_last_focused: bool,
         state: WindowState,
+        window_type: Option<WindowType>,
+        incognito: bool,
+        width: Option<u32>,
+        height: Option<u32>,
+        left: Option<i32>,
+        top: Option<i32>,
         tabs: Vec<TabSummary>,
     ) -> Self {
         Self {
@@ -316,6 +642,12 @@ impl WindowSummary {
             is_focused,
             is_last_focused,
             state,
+            window_type,
+            incognito,
+            width,
+            height,
+            left,
+            top,
             tabs,
         }
     }
@@ -330,6 +662,8 @@ pub enum TabStatus {
     Loading,
     /// The tab has finished loading.
     Complete,
+    /// The tab has been discarded (unloaded from memory). Chrome-only.
+    Unloaded,
 }
 
 /// The state of a download.
@@ -421,6 +755,12 @@ pub struct DownloadItem {
     pub mime: Option<String>,
     /// Whether the download is associated with a private/incognito session.
     pub incognito: bool,
+    /// Predicted completion time as an ISO 8601 timestamp string.
+    #[serde(default)]
+    pub estimated_end_time: Option<String>,
+    /// Danger classification of the download (e.g. "safe", "file", "url", "uncommon", "malware").
+    #[serde(default)]
+    pub danger: Option<String>,
 }
 
 impl DownloadItem {
@@ -450,6 +790,8 @@ impl DownloadItem {
         exists: bool,
         mime: Option<String>,
         incognito: bool,
+        estimated_end_time: Option<String>,
+        danger: Option<String>,
     ) -> Self {
         Self {
             id,
@@ -467,6 +809,8 @@ impl DownloadItem {
             exists,
             mime,
             incognito,
+            estimated_end_time,
+            danger,
         }
     }
 }
@@ -558,17 +902,38 @@ pub struct TabDetails {
     /// Firefox-specific; `None` on browsers that don't support containers.
     #[serde(default)]
     pub container_name: Option<String>,
+    /// The ID of the tab that opened this one, if any.
+    ///
+    /// `None` when the tab was not opened by another tab (e.g. opened via the
+    /// address bar, bookmarks, or the `tabs open` command).
+    #[serde(default)]
+    pub opener_tab_id: Option<TabId>,
+    /// Timestamp (milliseconds since epoch) of the last user interaction.
+    ///
+    /// Firefox-specific; `None` on browsers that don't track this.
+    #[serde(default)]
+    pub last_accessed: Option<u64>,
+    /// Whether the browser can auto-discard this tab to save memory.
+    ///
+    /// Chrome-specific; `None` on browsers that don't support this.
+    #[serde(default)]
+    pub auto_discardable: Option<bool>,
+    /// Tab group ID, or `None` if this tab is not in a group.
+    ///
+    /// Chrome-specific; `None` on browsers that don't support tab groups.
+    #[serde(default)]
+    pub group_id: Option<TabGroupId>,
 }
 
 impl TabDetails {
     /// Create a new `TabDetails`.
     #[expect(
         clippy::too_many_arguments,
-        reason = "mirrors the Firefox tabs.Tab API fields"
+        reason = "mirrors the browser's tabs.Tab API fields"
     )]
     #[expect(
         clippy::fn_params_excessive_bools,
-        reason = "mirrors the Firefox tabs.Tab API booleans"
+        reason = "mirrors the browser's tabs.Tab API booleans"
     )]
     #[must_use]
     pub const fn new(
@@ -593,6 +958,10 @@ impl TabDetails {
         history_hidden_count: Option<u32>,
         cookie_store_id: Option<CookieStoreId>,
         container_name: Option<String>,
+        opener_tab_id: Option<TabId>,
+        last_accessed: Option<u64>,
+        auto_discardable: Option<bool>,
+        group_id: Option<TabGroupId>,
     ) -> Self {
         Self {
             id,
@@ -616,6 +985,10 @@ impl TabDetails {
             history_hidden_count,
             cookie_store_id,
             container_name,
+            opener_tab_id,
+            last_accessed,
+            auto_discardable,
+            group_id,
         }
     }
 }
@@ -763,6 +1136,89 @@ pub enum BrowserEvent {
         /// The download's ID.
         download_id: DownloadId,
     },
+    /// A tab was moved to a new position within its window.
+    TabMoved {
+        /// The ID of the moved tab.
+        tab_id: TabId,
+        /// The window containing the tab.
+        window_id: WindowId,
+        /// The previous zero-based index.
+        from_index: u32,
+        /// The new zero-based index.
+        to_index: u32,
+    },
+    /// A tab was attached to a window (moved from another window).
+    TabAttached {
+        /// The ID of the attached tab.
+        tab_id: TabId,
+        /// The window the tab was attached to.
+        new_window_id: WindowId,
+        /// The tab's new zero-based index in the window.
+        new_index: u32,
+    },
+    /// A tab was detached from a window (being moved to another window).
+    TabDetached {
+        /// The ID of the detached tab.
+        tab_id: TabId,
+        /// The window the tab was detached from.
+        old_window_id: WindowId,
+        /// The tab's old zero-based index in the window.
+        old_index: u32,
+    },
+    /// The focused window changed.
+    WindowFocusChanged {
+        /// The newly focused window ID, or `None` if all windows lost focus
+        /// (e.g. the user switched to another application).
+        #[serde(default)]
+        window_id: Option<WindowId>,
+    },
+    /// A tab group was created. Chrome-only.
+    TabGroupCreated {
+        /// The new group's ID.
+        group_id: TabGroupId,
+        /// The window containing the group.
+        window_id: WindowId,
+        /// The group's display title.
+        title: String,
+        /// The group's color.
+        color: String,
+        /// Whether the group is collapsed.
+        collapsed: bool,
+    },
+    /// A tab group's properties changed. Chrome-only.
+    TabGroupUpdated {
+        /// The updated group's ID.
+        group_id: TabGroupId,
+        /// The window containing the group.
+        window_id: WindowId,
+        /// The group's display title.
+        title: String,
+        /// The group's color.
+        color: String,
+        /// Whether the group is collapsed.
+        collapsed: bool,
+    },
+    /// A tab group was removed. Chrome-only.
+    TabGroupRemoved {
+        /// The removed group's ID.
+        group_id: TabGroupId,
+        /// The window that contained the group.
+        window_id: WindowId,
+    },
+    /// An uncaught error or unhandled promise rejection occurred in the
+    /// extension's service worker.
+    ///
+    /// These are forwarded from the extension's global error handlers so they
+    /// are visible in the mediator log and event stream.
+    ExtensionError {
+        /// Error category (e.g. `"uncaught_error"`, `"unhandled_rejection"`).
+        kind: String,
+        /// Human-readable error message.
+        message: String,
+        /// Stack trace or additional context.
+        #[serde(default)]
+        detail: String,
+    },
     /// Some events were lost because the consumer could not keep up.
     ///
     /// This is a synthetic event generated by the mediator, not the browser.
@@ -894,6 +1350,16 @@ pub enum CliCommand {
         /// E.g. `"firefox-container-1"`.
         #[serde(default)]
         cookie_store_id: Option<CookieStoreId>,
+        /// Optional timeout in milliseconds to wait for the tab to finish loading
+        /// before returning.
+        ///
+        /// When set, the extension waits for `tabs.onUpdated` to report
+        /// `status: "complete"` for this tab, up to the given timeout. If the
+        /// timeout elapses, the tab details are returned in whatever state they
+        /// are in. When `None`, the tab details are returned immediately after
+        /// creation without waiting.
+        #[serde(default)]
+        wait_for_load_timeout_ms: Option<u32>,
     },
     /// Activate a tab, making it the focused tab in its window.
     ActivateTab {
@@ -1081,6 +1547,66 @@ pub enum CliCommand {
         #[serde(default)]
         state: Option<DownloadState>,
     },
+    /// List all tab groups, optionally filtered by window.
+    ///
+    /// Chrome-only. Returns an error on browsers that do not support tab groups.
+    ListTabGroups {
+        /// Only list groups in this window.
+        #[serde(default)]
+        window_id: Option<WindowId>,
+    },
+    /// Get a single tab group by ID.
+    ///
+    /// Chrome-only.
+    GetTabGroup {
+        /// The ID of the group to retrieve.
+        group_id: TabGroupId,
+    },
+    /// Update a tab group's properties.
+    ///
+    /// Chrome-only.
+    UpdateTabGroup {
+        /// The ID of the group to update.
+        group_id: TabGroupId,
+        /// New title for the group.
+        #[serde(default)]
+        title: Option<String>,
+        /// New color for the group.
+        #[serde(default)]
+        color: Option<TabGroupColor>,
+        /// New collapsed state for the group.
+        #[serde(default)]
+        collapsed: Option<bool>,
+    },
+    /// Move a tab group to a new position.
+    ///
+    /// Chrome-only.
+    MoveTabGroup {
+        /// The ID of the group to move.
+        group_id: TabGroupId,
+        /// The new zero-based index for the group.
+        index: u32,
+        /// Move the group to a different window.
+        #[serde(default)]
+        window_id: Option<WindowId>,
+    },
+    /// Add tabs to a tab group, optionally creating a new group.
+    ///
+    /// Chrome-only.
+    GroupTabs {
+        /// The tab IDs to group.
+        tab_ids: Vec<TabId>,
+        /// The group to add the tabs to. If `None`, a new group is created.
+        #[serde(default)]
+        group_id: Option<TabGroupId>,
+    },
+    /// Remove tabs from their tab groups.
+    ///
+    /// Chrome-only.
+    UngroupTabs {
+        /// The tab IDs to ungroup.
+        tab_ids: Vec<TabId>,
+    },
 }
 
 /// A request sent from the CLI to the mediator.
@@ -1147,6 +1673,13 @@ pub enum CliResult {
         /// The new download's ID.
         download_id: DownloadId,
     },
+    /// Tab group list returned by `ListTabGroups`.
+    TabGroups {
+        /// The list of tab groups.
+        tab_groups: Vec<TabGroupInfo>,
+    },
+    /// Details of a single tab group.
+    TabGroup(TabGroupInfo),
     /// Returned by commands that have no meaningful output.
     Unit,
 }
@@ -1183,7 +1716,7 @@ impl CliResponse {
     }
 }
 
-/// Initial hello message sent from the Firefox extension to the mediator upon connection.
+/// Initial hello message sent from the browser extension to the mediator upon connection.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionHello {
@@ -1214,7 +1747,7 @@ impl ExtensionHello {
     }
 }
 
-/// A message received by the mediator from the Firefox extension via native messaging.
+/// A message received by the mediator from the browser extension via native messaging.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "message_type")]
@@ -1246,6 +1779,7 @@ impl std::fmt::Display for TabStatus {
         match self {
             Self::Loading => write!(f, "loading"),
             Self::Complete => write!(f, "complete"),
+            Self::Unloaded => write!(f, "unloaded"),
         }
     }
 }

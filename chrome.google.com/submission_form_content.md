@@ -27,11 +27,16 @@ For windows it allows listing, opening (including incognito windows) and closing
 windows. Window title prefix management is a Firefox-only feature and is not
 available on Chrome.
 
-For tabs it allows listing, opening, activating, navigating to a new URL,
-closing, reloading (with optional cache bypass), pinning, unpinning, discarding
-tabs to free memory, muting and unmuting tab audio, moving the tab to a
-different position in the window's tab bar, going forward and backward in
-history, and sorting tabs by domain.
+For tabs it allows listing, opening (with optional wait-for-load timeout),
+activating, navigating to a new URL, closing, reloading (with optional cache
+bypass), pinning, unpinning, discarding tabs to free memory, muting and
+unmuting tab audio, moving the tab to a different position in the window's tab
+bar, going forward and backward in history, and sorting tabs by domain.
+
+For tab groups (Chrome-only) it allows listing all tab groups, getting a
+specific group, updating group properties (title, color, collapsed state),
+moving groups, adding tabs to groups (or creating new groups), and removing
+tabs from groups.
 
 Some tab features are Firefox-only and return an error on Chrome: toggling
 Reader Mode, warming up discarded tabs, and reopening tabs in containers.
@@ -48,8 +53,10 @@ credentials in the URL where they would be visible in the address bar, history,
 and logs.
 
 The event stream includes events for window and tab operations (open, close,
-activate, navigate, title change, status change) as well as download events
-(created, changed, erased).
+activate, navigate, title change, status change, tab moved, tab
+attached/detached between windows, window focus changed), tab group events
+(created, updated, removed) on Chrome, as well as download events (created,
+changed, erased).
 
 Note: My primary testing and development platform for this is Linux but I do
 provide binaries for other desktop platforms for the Rust side of this. Bug
@@ -135,6 +142,29 @@ within a window, and discard tabs to free memory. All operations are
 initiated by
 explicit CLI commands from the local user -- nothing happens automatically or in
 the background.
+
+tabGroups justification:
+
+Required to implement Chrome tab group management from the command line.
+Read operations: list all tab groups (with optional window filter), get a
+specific group by ID. Write operations: update a group's title, color, and
+collapsed state, move a group to a new position or window, add tabs to an
+existing group or create a new group, and remove tabs from their groups. All
+operations are initiated by explicit CLI commands from the local user. The
+extension also listens to tabGroups.onCreated, tabGroups.onUpdated, and
+tabGroups.onRemoved events to include them in the event stream. This
+permission is Chrome-only; tab groups are not available on Firefox.
+
+webRequestAuthProvider justification:
+
+Works together with the webRequest permission to handle HTTP Basic
+Authentication. This Chrome MV3 permission specifically allows the
+onAuthRequired listener to provide credentials in response to 401 challenges.
+When the CLI opens a tab with username/password credentials, the listener
+supplies them programmatically, avoiding the need to embed credentials in
+URLs. When no credentials are stored for a request, the handler returns
+cancel: false so Chrome shows its native auth dialog. Credentials are held
+in memory only briefly (30-second timeout) and are never persisted.
 
 webRequest justification:
 

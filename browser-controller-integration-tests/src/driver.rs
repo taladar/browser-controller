@@ -47,26 +47,58 @@ impl Process {
     /// Returns an error if the driver binary is not found, fails to start, or does
     /// not become ready within the timeout.
     pub async fn start(browser: browser::Kind) -> Result<Self, Error> {
-        let binary = browser.driver_binary_name();
+        Self::start_with_binary(browser, None).await
+    }
 
-        // Verify the binary exists
-        which::which(binary).map_err(|_e| Error::NotFound(binary.to_owned()))?;
+    /// Start a WebDriver process using a specific binary path.
+    ///
+    /// If `binary_path` is `None`, the default binary name from `$PATH` is used.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the binary is not found, fails to start, or does
+    /// not become ready within the timeout.
+    pub async fn start_with_binary(
+        browser: browser::Kind,
+        binary_path: Option<&std::path::Path>,
+    ) -> Result<Self, Error> {
+        let binary: std::borrow::Cow<'_, str> = match binary_path {
+            Some(p) => p.to_string_lossy(),
+            None => {
+                let name = browser.driver_binary_name();
+                which::which(name).map_err(|_e| Error::NotFound(name.to_owned()))?;
+                std::borrow::Cow::Borrowed(name)
+            }
+        };
 
         let port = find_free_port();
 
-        let child = Command::new(binary)
-            .arg("--port")
-            .arg(port.to_string())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+        let mut child = Command::new(binary.as_ref())
+            .arg(format!("--port={port}"))
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|e| Error::StartFailed(binary.to_owned(), e))?;
+            .map_err(|e| Error::StartFailed(binary.to_string(), e))?;
 
         let timeout = Duration::from_secs(10);
-        wait_for_port(port, timeout)
-            .await
-            .map_err(|()| Error::Timeout(binary.to_owned(), timeout))?;
+        if wait_for_port(port, timeout).await == Err(()) {
+            // Capture whatever the driver wrote before the timeout.
+            let stdout = child.stdout.take();
+            let stderr = child.stderr.take();
+            let mut stdout_buf = String::new();
+            let mut stderr_buf = String::new();
+            if let Some(mut out) = stdout {
+                drop(tokio::io::AsyncReadExt::read_to_string(&mut out, &mut stdout_buf).await);
+            }
+            if let Some(mut err) = stderr {
+                drop(tokio::io::AsyncReadExt::read_to_string(&mut err, &mut stderr_buf).await);
+            }
+            return Err(Error::Timeout(
+                format!("{binary} (port {port})\nstdout: {stdout_buf}\nstderr: {stderr_buf}"),
+                timeout,
+            ));
+        }
 
         Ok(Self {
             child,
@@ -81,7 +113,8 @@ impl Process {
 /// # Panics
 ///
 /// Panics if binding to port 0 fails (should not happen on a healthy system).
-fn find_free_port() -> u16 {
+#[must_use]
+pub fn find_free_port() -> u16 {
     #[expect(
         clippy::expect_used,
         reason = "binding to port 0 should always succeed"

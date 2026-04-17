@@ -70,7 +70,6 @@ async fn open_close_tab_body(h: &Harness) {
         window_id,
         "new tab should be in the requested window",
     );
-    let new_tab_id = details.id;
 
     // Verify tab count increased
     let after_open_count = tab_count(h, window_id).await;
@@ -82,7 +81,7 @@ async fn open_close_tab_body(h: &Harness) {
 
     // Close the tab
     h.client()
-        .close_tab(new_tab_id)
+        .close_tab(details.id)
         .await
         .expect("CloseTab should succeed");
 
@@ -148,12 +147,6 @@ async fn navigate_tab_body(h: &Harness) {
         "tab URL should start with {target_url} after NavigateTab, got {}",
         tab.url,
     );
-
-    // Cleanup: close the tab
-    h.client()
-        .close_tab(tab_id)
-        .await
-        .expect("CloseTab should succeed");
 }
 
 #[tokio::test]

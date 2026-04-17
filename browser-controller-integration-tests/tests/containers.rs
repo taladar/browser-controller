@@ -70,7 +70,7 @@ async fn list_containers_body(h: &Harness) {
     // Verify container fields are populated
     let first = containers.first().expect("just asserted non-empty");
     assert!(
-        !first.cookie_store_id.0.is_empty(),
+        !first.cookie_store_id.as_str().is_empty(),
         "cookie_store_id should not be empty",
     );
     assert!(!first.name.is_empty(), "name should not be empty");
@@ -140,8 +140,6 @@ async fn open_tab_in_container_body(h: &Harness) {
         Some(container_id.clone()),
         "ListTabs should show the container",
     );
-
-    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -214,9 +212,6 @@ async fn reopen_tab_in_container_body(h: &Harness) {
         "reopened tab should have the same URL, got {}",
         new_tab.url,
     );
-    let new_tab_id = new_tab.id;
-
-    h.client().close_tab(new_tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -268,8 +263,6 @@ async fn tab_cookie_store_id_in_listing_body(h: &Harness) {
             // Chrome doesn't support containers; cookie_store_id may be None
         }
     }
-
-    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -344,9 +337,6 @@ async fn container_name_in_tab_details_body(h: &Harness) {
         Some(container_name.as_str()),
         "OpenTab response should include container_name",
     );
-    let tab_id = tab.id;
-
-    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -400,7 +390,7 @@ async fn cli_tab_cookie_store_id_matcher_body(h: &Harness) {
             "tabs",
             "activate",
             "--tab-cookie-store-id",
-            &container_id.0,
+            container_id.as_str(),
             "--window-id",
             &w,
         ],
@@ -413,8 +403,6 @@ async fn cli_tab_cookie_store_id_matcher_body(h: &Harness) {
         }
         other => panic!("expected Tab, got {other:?}"),
     }
-
-    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -476,8 +464,6 @@ async fn cli_tab_container_name_matcher_body(h: &Harness) {
         }
         other => panic!("expected Tab, got {other:?}"),
     }
-
-    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]

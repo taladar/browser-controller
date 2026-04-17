@@ -196,6 +196,7 @@ async fn write_cli_response<W: tokio::io::AsyncWrite + Unpin>(
     let mut json = serde_json::to_vec(response)?;
     json.push(b'\n');
     writer.write_all(&json).await?;
+    writer.flush().await?;
     Ok(())
 }
 
@@ -729,8 +730,8 @@ async fn run() -> Result<(), Error> {
         });
     }
 
-    // Keep the socket/marker file alive for the full duration of run().
-    let _socket_guard = SocketGuard {
+    // Keep the socket/marker file alive until shutdown.
+    let socket_guard = SocketGuard {
         path: sock_path.clone(),
     };
 
@@ -818,6 +819,10 @@ async fn run() -> Result<(), Error> {
     // Map from request_id to the oneshot sender waiting for its response.
     let mut pending: HashMap<String, oneshot::Sender<CliOutcome>> = HashMap::new();
 
+    // Track the most recent extension error so it can be included in the
+    // disconnect message sent to pending clients.
+    let mut last_extension_error: Option<String> = None;
+
     loop {
         tokio::select! {
             // Message from extension via stdin reader task.
@@ -838,7 +843,19 @@ async fn run() -> Result<(), Error> {
                         tracing::warn!("Received unexpected Hello after initial handshake");
                     }
                     Some(Ok(Some(ExtensionMessage::Event { event }))) => {
-                        tracing::debug!("Broadcasting browser event");
+                        // Log extension errors at warn level so they're visible
+                        // in the mediator's log even without an event-stream subscriber.
+                        if let BrowserEvent::ExtensionError { ref kind, ref message, ref detail } = event {
+                            tracing::warn!(
+                                kind = %kind,
+                                message = %message,
+                                detail = %detail,
+                                "Extension reported an error",
+                            );
+                            last_extension_error = Some(format!("{kind}: {message}"));
+                        } else {
+                            tracing::debug!("Broadcasting browser event");
+                        }
                         // .send() returns Err only if there are no receivers; that's fine.
                         drop(event_tx.send(event));
                     }
@@ -907,6 +924,11 @@ async fn run() -> Result<(), Error> {
         }
     }
 
+    // Remove the socket file immediately so no new clients can discover a
+    // shutting-down mediator. Existing connected clients are unaffected —
+    // their socket connections remain open until we close them.
+    drop(socket_guard);
+
     // Send an error to all clients still waiting for a response so they
     // don't have to wait for their timeout.
     if !pending.is_empty() {
@@ -914,11 +936,21 @@ async fn run() -> Result<(), Error> {
             count = pending.len(),
             "Notifying pending clients of extension disconnect",
         );
+        let error_msg = match &last_extension_error {
+            Some(ext_err) => {
+                format!("extension disconnected while command was pending (last error: {ext_err})")
+            }
+            None => "extension disconnected while command was pending".to_owned(),
+        };
         for (_request_id, response_tx) in pending {
-            let outcome =
-                CliOutcome::Err("extension disconnected while command was pending".to_owned());
+            let outcome = CliOutcome::Err(error_msg.clone());
             drop(response_tx.send(outcome));
         }
+        // Give the spawned CLI handler tasks time to receive the error via
+        // the oneshot channel and write it to their sockets before the
+        // runtime shuts down. A yield alone isn't sufficient because the
+        // handler tasks need multiple poll cycles (receive → serialize → write → flush).
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     Ok(())
@@ -1004,10 +1036,4 @@ async fn main() {
     }
 
     tracing::debug!("Mediator exiting normally");
-}
-
-#[cfg(test)]
-mod test {
-    //use super::*;
-    //use pretty_assertions::{assert_eq, assert_ne};
 }

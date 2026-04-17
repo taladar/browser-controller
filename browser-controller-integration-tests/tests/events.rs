@@ -77,8 +77,6 @@ async fn event_tab_opened_body(h: &Harness) {
     )
     .await;
     assert!(found.is_some(), "expected TabOpened event for tab {tab_id}");
-
-    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -114,7 +112,10 @@ async fn event_tab_closed_body(h: &Harness) {
         .await
         .expect("open");
 
-    h.client().close_tab(tab_id).await.expect("CloseTab");
+    h.client()
+        .close_tab(tab_id)
+        .await
+        .expect("CloseTab should succeed to trigger event");
 
     let found = wait_for_event(
         &mut sub,
@@ -168,8 +169,6 @@ async fn event_tab_activated_body(h: &Harness) {
         found.is_some(),
         "expected TabActivated event for tab {tab1}"
     );
-
-    h.client().close_tab(tab1).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -220,8 +219,6 @@ async fn event_tab_navigated_body(h: &Harness) {
         found.is_some(),
         "expected TabNavigated event for tab {tab_id}",
     );
-
-    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -272,8 +269,6 @@ async fn event_tab_title_changed_body(h: &Harness) {
         found.is_some(),
         "expected TabTitleChanged event for tab {tab_id}",
     );
-
-    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -325,8 +320,6 @@ async fn event_tab_status_changed_body(h: &Harness) {
         found.is_some(),
         "expected TabStatusChanged event for tab {tab_id}",
     );
-
-    h.client().close_tab(tab_id).await.expect("cleanup");
 }
 
 #[tokio::test]
@@ -365,11 +358,6 @@ async fn event_window_opened_body(h: &Harness) {
         found.is_some(),
         "expected WindowOpened event for window {new_window_id}",
     );
-
-    h.client()
-        .close_window(new_window_id)
-        .await
-        .expect("cleanup");
 }
 
 #[tokio::test]
@@ -403,7 +391,7 @@ async fn event_window_closed_body(h: &Harness) {
     h.client()
         .close_window(new_window_id)
         .await
-        .expect("CloseWindow");
+        .expect("CloseWindow should succeed to trigger event");
 
     let found = wait_for_event(
         &mut sub,

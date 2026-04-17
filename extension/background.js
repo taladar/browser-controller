@@ -21,6 +21,52 @@
 
 "use strict";
 
+// Catch uncaught errors and unhandled promise rejections globally so that a
+// single bad API call (e.g. an unavailable Chrome API) doesn't silently kill
+// the service worker and tear down the native messaging connection.
+//
+// These handlers log to the console AND forward the error to the mediator as
+// a native messaging event (if connected), so the error is visible both in
+// chrome://extensions and in the mediator's log / event stream.
+self.addEventListener("error", (event) => {
+  const detail = {
+    message: event.message ?? "",
+    filename: event.filename ?? "",
+    lineno: event.lineno ?? 0,
+    colno: event.colno ?? 0,
+    error: String(event.error ?? ""),
+  };
+  console.error("[browser-controller] Uncaught error:", detail);
+  pushErrorEvent("uncaught_error", detail.message, detail.error);
+});
+self.addEventListener("unhandledrejection", (event) => {
+  const reason = String(event.reason ?? "");
+  const stack = event.reason?.stack ?? "";
+  console.error("[browser-controller] Unhandled promise rejection:", { reason, stack });
+  pushErrorEvent("unhandled_rejection", reason, stack);
+});
+
+/**
+ * Forward an internal error to the mediator as a native messaging event.
+ *
+ * Sent as an `ExtensionError` event type. Silently ignored if the native port
+ * is not connected (e.g. during startup before `connect()` has been called).
+ *
+ * @param {string} kind  - Error category (e.g. "uncaught_error", "unhandled_rejection").
+ * @param {string} message - Human-readable error message.
+ * @param {string} detail  - Stack trace or additional context.
+ */
+function pushErrorEvent(kind, message, detail) {
+  if (typeof pushEvent === "function") {
+    try {
+      pushEvent({ type: "ExtensionError", kind, message, detail });
+    } catch {
+      // If pushEvent itself fails (port disconnected etc.), just log.
+      console.warn("[browser-controller] Could not forward error to mediator");
+    }
+  }
+}
+
 // Chrome uses the 'chrome' namespace; alias it as 'browser' so all code below
 // works unchanged in both Firefox and Chrome.
 if (typeof browser === "undefined") {
@@ -101,57 +147,78 @@ browser.windows.onCreated.addListener(async (win) => {
 });
 
 browser.webRequest.onAuthRequired.addListener(
-  async (details) => {
-    if (details.tabId >= 0) {
-      pendingAuthTabs.add(details.tabId);
-    }
-
-    // Match pending credentials by the request URL's origin and the tab's
-    // cookie store ID (container). This allows different credentials for
-    // the same origin in different containers.
-    // Do NOT delete the entry here — multiple requests to the same origin
-    // (main page, favicon, subresources) may each trigger a 401 during the
-    // initial page load. The entry is cleaned up by cmdOpenTab after the
-    // tab finishes loading.
-    try {
-      const origin = new URL(details.url).origin;
-      let storeId = "";
-      if (details.tabId >= 0) {
-        try {
-          const tab = await browser.tabs.get(details.tabId);
-          storeId = tab.cookieStoreId ?? "";
-        } catch {
-          // Tab may not exist yet or be inaccessible; use default key.
+  isFirefox
+    // Firefox: async handler with container-aware credential lookup.
+    ? async (details) => {
+        if (details.tabId >= 0) {
+          pendingAuthTabs.add(details.tabId);
         }
+        try {
+          const origin = new URL(details.url).origin;
+          let storeId = "";
+          if (details.tabId >= 0) {
+            try {
+              const tab = await browser.tabs.get(details.tabId);
+              storeId = tab.cookieStoreId ?? "";
+            } catch {
+              // Tab may not exist yet or be inaccessible; use default key.
+            }
+          }
+          const creds = pendingCredentials.get(credentialKey(origin, storeId))
+            ?? pendingCredentials.get(credentialKey(origin, null));
+          if (creds) {
+            return { authCredentials: creds };
+          }
+        } catch {
+          // URL parsing failed; ignore and fall through.
+        }
+        return {};
       }
-      const creds = pendingCredentials.get(credentialKey(origin, storeId))
-        // Fall back to the "no container specified" key. This handles the
-        // common case where OpenTab was called without --container, storing
-        // with an empty cookieStoreId, but the browser assigns a default
-        // store like "firefox-default".
-        ?? pendingCredentials.get(credentialKey(origin, null));
-      if (creds) {
-        return { authCredentials: creds };
-      }
-    } catch {
-      // URL parsing failed; ignore and fall through.
-    }
-    return {};
-  },
+    // Chrome: synchronous handler. Cannot call async tabs.get() here because
+    // Chrome blocks the network request until the handler returns, and
+    // tabs.get() itself may block waiting for the network — causing a
+    // deadlock. Match on origin only (without container/cookie store).
+    //
+    // When no credentials are found, return `{ cancel: false }` to tell
+    // Chrome to show its native auth dialog instead of cancelling the
+    // request.
+    : (details) => {
+        if (details.tabId >= 0) {
+          pendingAuthTabs.add(details.tabId);
+        }
+        try {
+          const origin = new URL(details.url).origin;
+          for (const [key, creds] of pendingCredentials) {
+            if (key.startsWith(origin + "\t")) {
+              return { authCredentials: creds };
+            }
+          }
+        } catch {
+          // URL parsing failed; ignore and fall through.
+        }
+        return { cancel: false };
+      },
   { urls: ["<all_urls>"] },
   ["blocking"],
 );
 
 browser.webRequest.onCompleted.addListener(
   (details) => {
-    pendingAuthTabs.delete(details.tabId);
+    // Only clear awaiting-auth when the main frame loads successfully
+    // (not a 401). Chrome fires onCompleted even while the auth dialog
+    // is showing because the extension declined to provide credentials.
+    if (details.type === "main_frame" && details.statusCode !== 401) {
+      pendingAuthTabs.delete(details.tabId);
+    }
   },
   { urls: ["<all_urls>"] },
 );
 
 browser.webRequest.onErrorOccurred.addListener(
   (details) => {
-    pendingAuthTabs.delete(details.tabId);
+    if (details.type === "main_frame") {
+      pendingAuthTabs.delete(details.tabId);
+    }
   },
   { urls: ["<all_urls>"] },
 );
@@ -283,6 +350,76 @@ browser.downloads.onErased.addListener((downloadId) => {
 });
 
 // ---------------------------------------------------------------------------
+// Tab movement and window focus event forwarding
+// ---------------------------------------------------------------------------
+
+browser.tabs.onMoved.addListener((tabId, moveInfo) => {
+  pushEvent({
+    type: "TabMoved",
+    tab_id: tabId,
+    window_id: moveInfo.windowId,
+    from_index: moveInfo.fromIndex,
+    to_index: moveInfo.toIndex,
+  });
+});
+
+browser.tabs.onAttached.addListener((tabId, attachInfo) => {
+  pushEvent({
+    type: "TabAttached",
+    tab_id: tabId,
+    new_window_id: attachInfo.newWindowId,
+    new_index: attachInfo.newPosition,
+  });
+});
+
+browser.tabs.onDetached.addListener((tabId, detachInfo) => {
+  pushEvent({
+    type: "TabDetached",
+    tab_id: tabId,
+    old_window_id: detachInfo.oldWindowId,
+    old_index: detachInfo.oldPosition,
+  });
+});
+
+browser.windows.onFocusChanged.addListener((windowId) => {
+  pushEvent({
+    type: "WindowFocusChanged",
+    window_id: windowId === browser.windows.WINDOW_ID_NONE ? null : windowId,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tab group event forwarding (Chrome-only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Serialize a Chrome TabGroup object to the wire format.
+ * @param {chrome.tabGroups.TabGroup} group
+ * @returns {object}
+ */
+function serializeTabGroup(group) {
+  return {
+    id: group.id,
+    title: group.title ?? "",
+    color: group.color ?? "grey",
+    collapsed: group.collapsed ?? false,
+    window_id: group.windowId,
+  };
+}
+
+if (!isFirefox && typeof chrome !== "undefined" && chrome.tabGroups) {
+  chrome.tabGroups.onCreated.addListener((group) => {
+    pushEvent({ type: "TabGroupCreated", group_id: group.id, ...serializeTabGroup(group) });
+  });
+  chrome.tabGroups.onUpdated.addListener((group) => {
+    pushEvent({ type: "TabGroupUpdated", group_id: group.id, ...serializeTabGroup(group) });
+  });
+  chrome.tabGroups.onRemoved.addListener((group) => {
+    pushEvent({ type: "TabGroupRemoved", group_id: group.id, window_id: group.windowId });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Native messaging connection
 // ---------------------------------------------------------------------------
 
@@ -356,6 +493,9 @@ function connect() {
     console.warn(
       `[browser-controller] Disconnected from mediator${err ? ": " + err.message : ""}. Reconnecting in ${reconnectDelayMs}ms.`,
     );
+    // Increase backoff delay for the next attempt (capped at MAX).
+    reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
+
     if (!isFirefox && chrome.alarms) {
       // On Chrome, use chrome.alarms instead of setTimeout. Alarms persist
       // across service worker restarts, so if Chrome kills the worker before
@@ -365,7 +505,6 @@ function connect() {
     } else {
       // Firefox: setTimeout is fine — background scripts are persistent.
       setTimeout(() => {
-        reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
         connect();
       }, reconnectDelayMs);
     }
@@ -479,6 +618,7 @@ async function dispatch(commandType, params) {
         params.password ?? null,
         params.background ?? false,
         params.cookie_store_id ?? null,
+        params.wait_for_load_timeout_ms ?? null,
       );
     case "ActivateTab":
       return cmdActivateTab(params.tab_id);
@@ -528,6 +668,18 @@ async function dispatch(commandType, params) {
       return cmdEraseDownload(params.download_id);
     case "EraseAllDownloads":
       return cmdEraseAllDownloads(params.state ?? null);
+    case "ListTabGroups":
+      return cmdListTabGroups(params.window_id ?? null);
+    case "GetTabGroup":
+      return cmdGetTabGroup(params.group_id);
+    case "UpdateTabGroup":
+      return cmdUpdateTabGroup(params.group_id, params.title ?? null, params.color ?? null, params.collapsed ?? null);
+    case "MoveTabGroup":
+      return cmdMoveTabGroup(params.group_id, params.index, params.window_id ?? null);
+    case "GroupTabs":
+      return cmdGroupTabs(params.tab_ids, params.group_id ?? null);
+    case "UngroupTabs":
+      return cmdUngroupTabs(params.tab_ids);
     default:
       throw new Error(`Unknown command type: ${commandType}`);
   }
@@ -631,27 +783,37 @@ async function cmdListTabs(windowId) {
 }
 
 /**
- * Wait for a specific tab to reach "complete" status.
+ * Wait for a specific tab to reach "complete" status, with a timeout.
  *
  * Resolves immediately if the tab is already complete; otherwise waits for
  * the next tabs.onUpdated event that sets status to "complete" for this tab.
+ * If the timeout elapses before the tab completes, resolves anyway so the
+ * caller can return the tab in whatever state it is in.
  *
  * @param {number} tabId
+ * @param {number} timeoutMs  Maximum time to wait in milliseconds.
  * @returns {Promise<void>}
  */
-async function waitForTabComplete(tabId) {
+async function waitForTabComplete(tabId, timeoutMs) {
   const current = await browser.tabs.get(tabId);
   if (current.status === "complete") {
     return;
   }
   await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      browser.tabs.onUpdated.removeListener(onUpdated);
+      resolve();
+    }, timeoutMs);
     function onUpdated(updatedTabId, changeInfo) {
       if (updatedTabId === tabId && changeInfo.status === "complete") {
+        clearTimeout(timer);
         browser.tabs.onUpdated.removeListener(onUpdated);
         resolve();
       }
     }
-    browser.tabs.onUpdated.addListener(onUpdated, { tabId, properties: ["status"] });
+    // Note: the filter parameter ({ tabId, properties }) is Firefox-only.
+    // Chrome does not support it, so we filter inside the callback instead.
+    browser.tabs.onUpdated.addListener(onUpdated);
   });
 }
 
@@ -663,7 +825,7 @@ async function waitForTabComplete(tabId) {
  * challenge. The browser then caches the credentials for the realm, so
  * subsequent requests work automatically.
  */
-async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, username, password, background, cookieStoreId) {
+async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, username, password, background, cookieStoreId, waitForLoadTimeoutMs) {
   const createProps = { windowId, active: !background };
   if (cookieStoreId !== null) {
     if (!isFirefox) throw new Error("Opening a tab in a container is only supported on Firefox");
@@ -724,6 +886,12 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, us
     // Clean up after 30 s — by then the auth exchange has either
     // succeeded or the user has dismissed the prompt.
     setTimeout(() => { pendingCredentials.delete(key); }, 30_000);
+  }
+
+  // Optionally wait for the tab to finish loading before returning.
+  if (waitForLoadTimeoutMs !== null) {
+    await waitForTabComplete(tab.id, waitForLoadTimeoutMs);
+    tab = await browser.tabs.get(tab.id);
   }
 
   return { type: "Tab", ...await serializeTabDetails(tab) };
@@ -860,7 +1028,9 @@ async function navigateHistory(tabId, delta) {
       ? setTimeout(finish, 5000)
       : null;
 
-    browser.tabs.onUpdated.addListener(onUpdated, { tabId, properties: ["url"] });
+    // Note: the filter parameter ({ tabId, properties }) is Firefox-only.
+    // Chrome does not support it, so we filter inside the callback instead.
+    browser.tabs.onUpdated.addListener(onUpdated);
 
     browser.scripting.executeScript({
       target: { tabId },
@@ -922,7 +1092,9 @@ async function cmdActivateTab(tabId) {
 
 /** Moves a tab to a new index within its window and returns its updated details. */
 async function cmdMoveTab(tabId, newIndex) {
-  const [moved] = await browser.tabs.move(tabId, { index: newIndex });
+  const result = await browser.tabs.move(tabId, { index: newIndex });
+  // Chrome returns a single Tab when moving one tab; Firefox returns an array.
+  const moved = Array.isArray(result) ? result[0] : result;
   return { type: "Tab", ...await serializeTabDetails(moved) };
 }
 
@@ -948,6 +1120,8 @@ function serializeDownloadItem(item) {
     exists: item.exists ?? false,
     mime: item.mime || null,
     incognito: item.incognito ?? false,
+    estimated_end_time: item.estimatedEndTime || null,
+    danger: item.danger || null,
   };
 }
 
@@ -1065,6 +1239,70 @@ async function cmdReopenTabInContainer(tabId, cookieStoreId) {
     cookieStoreId,
   });
   return { type: "Tab", ...await serializeTabDetails(newTab) };
+}
+
+// ---------------------------------------------------------------------------
+// Tab group command implementations (Chrome-only)
+// ---------------------------------------------------------------------------
+
+/** List all tab groups, optionally filtered by window. */
+async function cmdListTabGroups(windowId) {
+  if (isFirefox || !chrome.tabGroups) throw new Error("Tab groups are only supported on Chrome (requires tabGroups permission)");
+  const query = {};
+  if (windowId !== null) {
+    query.windowId = windowId;
+  }
+  const groups = await chrome.tabGroups.query(query);
+  return {
+    type: "TabGroups",
+    tab_groups: groups.map(serializeTabGroup),
+  };
+}
+
+/** Get a single tab group by ID. */
+async function cmdGetTabGroup(groupId) {
+  if (isFirefox || !chrome.tabGroups) throw new Error("Tab groups are not supported in this browser");
+  const group = await chrome.tabGroups.get(groupId);
+  return { type: "TabGroup", ...serializeTabGroup(group) };
+}
+
+/** Update a tab group's properties. */
+async function cmdUpdateTabGroup(groupId, title, color, collapsed) {
+  if (isFirefox || !chrome.tabGroups) throw new Error("Tab groups are not supported in this browser");
+  const updateProps = {};
+  if (title !== null) updateProps.title = title;
+  if (color !== null) updateProps.color = color;
+  if (collapsed !== null) updateProps.collapsed = collapsed;
+  const group = await chrome.tabGroups.update(groupId, updateProps);
+  return { type: "TabGroup", ...serializeTabGroup(group) };
+}
+
+/** Move a tab group to a new position. */
+async function cmdMoveTabGroup(groupId, index, windowId) {
+  if (isFirefox || !chrome.tabGroups) throw new Error("Tab groups are not supported in this browser");
+  const moveProps = { index };
+  if (windowId !== null) moveProps.windowId = windowId;
+  const group = await chrome.tabGroups.move(groupId, moveProps);
+  return { type: "TabGroup", ...serializeTabGroup(group) };
+}
+
+/** Add tabs to a group (creating a new group if groupId is null). */
+async function cmdGroupTabs(tabIds, groupId) {
+  if (isFirefox || !chrome.tabGroups) throw new Error("Tab groups are not supported in this browser");
+  const options = { tabIds };
+  if (groupId !== null) {
+    options.groupId = groupId;
+  }
+  const resultGroupId = await chrome.tabs.group(options);
+  const group = await chrome.tabGroups.get(resultGroupId);
+  return { type: "TabGroup", ...serializeTabGroup(group) };
+}
+
+/** Remove tabs from their groups. */
+async function cmdUngroupTabs(tabIds) {
+  if (isFirefox || !chrome.tabGroups) throw new Error("Tab groups are not supported in this browser");
+  await chrome.tabs.ungroup(tabIds);
+  return { type: "Unit" };
 }
 
 // ---------------------------------------------------------------------------
@@ -1191,6 +1429,12 @@ async function serializeWindowSummary(win, lastFocusedId) {
     is_focused: win.focused,
     is_last_focused: win.id === lastFocusedId,
     state: win.state ?? "normal",
+    window_type: win.type ?? null,
+    incognito: win.incognito ?? false,
+    width: win.width ?? null,
+    height: win.height ?? null,
+    left: win.left ?? null,
+    top: win.top ?? null,
     tabs: await Promise.all((win.tabs ?? []).map(serializeTabSummary)),
   };
 }
@@ -1210,6 +1454,7 @@ async function serializeTabSummary(tab) {
     is_active: tab.active,
     cookie_store_id: tab.cookieStoreId ?? null,
     container_name: await resolveContainerName(tab.cookieStoreId),
+    incognito: tab.incognito ?? false,
   };
 }
 
@@ -1229,8 +1474,22 @@ async function serializeTabSummary(tab) {
  * @returns {Promise<{history_length: number, history_steps_back: number|null, history_steps_forward: number|null, history_hidden_count: number|null}>}
  */
 async function getTabHistoryInfo(tabId, isDiscarded) {
+  const empty = { history_length: 0, history_steps_back: null, history_steps_forward: null, history_hidden_count: null };
   if (isDiscarded) {
-    return { history_length: 0, history_steps_back: null, history_steps_forward: null, history_hidden_count: null };
+    return empty;
+  }
+  // Skip content script injection for tabs that can't run scripts:
+  // privileged URLs, tabs that are still loading, or unloaded (discarded) tabs.
+  try {
+    const tab = await browser.tabs.get(tabId);
+    const url = tab.url ?? "";
+    if (tab.status === "loading" || tab.status === "unloaded"
+        || url.startsWith("chrome://") || url.startsWith("chrome-extension://")
+        || url.startsWith("about:") || url === "") {
+      return empty;
+    }
+  } catch {
+    return empty;
   }
   try {
     const results = await browser.scripting.executeScript({
@@ -1270,31 +1529,52 @@ async function getTabHistoryInfo(tabId, isDiscarded) {
  * @returns {Promise<object>}
  */
 async function serializeTabDetails(tab) {
-  const { history_length, history_steps_back, history_steps_forward, history_hidden_count } =
-    await getTabHistoryInfo(tab.id, tab.discarded ?? false);
-  return {
-    id: tab.id,
-    index: tab.index,
-    window_id: tab.windowId,
-    title: tab.title ?? "",
-    url: tab.url ?? "",
-    is_active: tab.active,
-    is_pinned: tab.pinned,
-    is_discarded: tab.discarded ?? false,
-    is_audible: tab.audible ?? false,
-    is_muted: tab.mutedInfo?.muted ?? false,
-    status: tab.status ?? "complete",
-    has_attention: tab.attention ?? false,
-    is_awaiting_auth: pendingAuthTabs.has(tab.id),
-    is_in_reader_mode: tab.isInReaderMode ?? false,
-    incognito: tab.incognito,
-    history_length,
-    history_steps_back,
-    history_steps_forward,
-    history_hidden_count,
-    cookie_store_id: tab.cookieStoreId ?? null,
-    container_name: await resolveContainerName(tab.cookieStoreId),
-  };
+  let history_length = 0;
+  let history_steps_back = null;
+  let history_steps_forward = null;
+  let history_hidden_count = null;
+  try {
+    const info = await getTabHistoryInfo(tab.id, tab.discarded ?? false);
+    history_length = info.history_length;
+    history_steps_back = info.history_steps_back;
+    history_steps_forward = info.history_steps_forward;
+    history_hidden_count = info.history_hidden_count;
+  } catch (err) {
+    console.error("[browser-controller] getTabHistoryInfo failed for tab", tab.id, err);
+  }
+  try {
+    return {
+      id: tab.id,
+      index: tab.index,
+      window_id: tab.windowId,
+      title: tab.title ?? "",
+      url: tab.url ?? "",
+      is_active: tab.active,
+      is_pinned: tab.pinned,
+      is_discarded: tab.discarded ?? false,
+      is_audible: tab.audible ?? false,
+      is_muted: tab.mutedInfo?.muted ?? false,
+      status: tab.status ?? "complete",
+      has_attention: tab.attention ?? false,
+      is_awaiting_auth: pendingAuthTabs.has(tab.id),
+      is_in_reader_mode: tab.isInReaderMode ?? false,
+      incognito: tab.incognito,
+      history_length,
+      history_steps_back,
+      history_steps_forward,
+      history_hidden_count,
+      cookie_store_id: tab.cookieStoreId ?? null,
+      container_name: await resolveContainerName(tab.cookieStoreId),
+      opener_tab_id: tab.openerTabId ?? null,
+      last_accessed: (isFirefox && tab.lastAccessed) ? tab.lastAccessed : null,
+      auto_discardable: (!isFirefox && tab.autoDiscardable !== undefined) ? tab.autoDiscardable : null,
+      group_id: (!isFirefox && tab.groupId !== undefined && tab.groupId >= 0) ? tab.groupId : null,
+    };
+  } catch (err) {
+    console.error("[browser-controller] serializeTabDetails failed for tab", tab.id, err);
+    pushErrorEvent("serialize_tab_error", String(err), err?.stack ?? "");
+    throw err;
+  }
 }
 
 /**
@@ -1366,7 +1646,6 @@ if (!isFirefox && typeof chrome !== "undefined" && chrome.alarms) {
     if (alarm.name === RECONNECT_ALARM_NAME) {
       console.info("[browser-controller] Alarm-based reconnect triggered.");
       if (nativePort === null) {
-        reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
         connect();
       }
     }
