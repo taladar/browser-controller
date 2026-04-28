@@ -14,17 +14,20 @@ This crate provides a high-level API for connecting to a running
 ## Quick start
 
 ```rust,no_run
+use browser_controller_client::{discover_instances, InstanceMatcher, MatchWith};
 use std::time::Duration;
-use browser_controller_client::{MatchWith, discover_instances, InstanceMatcher};
 
 # async fn example() -> Result<(), browser_controller_client::Error> {
-let instances = discover_instances().await?;
-let matched = instances.match_with(&InstanceMatcher::default())?;
-let instance = matched.first().expect("at least one instance");
-let client = instance.client(Duration::from_secs(30));
-let info = client.browser_info().await?;
-println!("Connected to {} {}", info.browser_name, info.browser_version);
-# Ok(())
+    let instances = discover_instances().await?;
+    let matched = instances.match_with(&InstanceMatcher::default())?;
+    let instance = matched.first().expect("at least one instance");
+    let client = instance.client(Duration::from_secs(30));
+    let info = client.browser_info().await?;
+    println!(
+        "Connected to {} {}",
+        info.browser_name, info.browser_version
+    );
+#     Ok(())
 # }
 ```
 

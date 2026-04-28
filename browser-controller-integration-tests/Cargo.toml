@@ -20,8 +20,8 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 webdriverbidi = "0.2.2"
-which = "7"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+which = "8"
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

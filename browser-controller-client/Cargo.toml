@@ -11,7 +11,12 @@ repository.workspace = true
 readme = "README.md"
 keywords = ["browser", "automation", "firefox", "chrome", "tabs"]
 categories = ["api-bindings"]
-exclude = [".env", "cliff.toml", "tarpaulin-report.html", "tarpaulin-report.json"]
+exclude = [
+  ".env",
+  "cliff.toml",
+  "tarpaulin-report.html",
+  "tarpaulin-report.json",
+]
 
 [dependencies]
 browser-controller-types = { workspace = true }

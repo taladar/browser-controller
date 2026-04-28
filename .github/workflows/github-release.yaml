@@ -1,7 +1,6 @@
 name: Release
 
-permissions:
-  contents: write
+permissions: {}
 
 on:
   push:
@@ -11,9 +10,13 @@ on:
 jobs:
   create-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v6
-      - uses: taiki-e/create-gh-release-action@v1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: taiki-e/create-gh-release-action@eba8ea96c86cca8a37f1b56e94b4d13301fba651 # v1.11.0
         with:
           prefix: 'browser_controller_'
           # Path to workspace changelog for the release body.
@@ -23,12 +26,15 @@ jobs:
       - name: Package browser extension
         run: ./package-extension.sh
       - name: Upload extension packages to release
-        run: gh release upload "${{ github.ref_name }}" dist/*.xpi dist/*.zip
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+        run: gh release upload "$REF_NAME" dist/*.xpi dist/*.zip
 
   upload-assets:
     needs: create-release
+    permissions:
+      contents: write
     strategy:
       matrix:
         include:
@@ -52,13 +58,15 @@ jobs:
         run: |
           echo "PERL=$((where.exe perl)[0])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           echo "OPENSSL_SRC_PERL=$((where.exe perl)[0])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - name: Install cross-compilation tools
-        uses: taiki-e/setup-cross-toolchain-action@v1
+        uses: taiki-e/setup-cross-toolchain-action@d62f33b587e73b0004731caebc7d2d46b18a7567 # v1.39.2
         with:
           target: ${{ matrix.target }}
         if: startsWith(matrix.os, 'ubuntu')
-      - uses: taiki-e/upload-rust-binary-action@v1
+      - uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
         with:
           # Build and upload both the CLI and the native messaging host mediator.
           bin: browser-controller,browser-controller-mediator
