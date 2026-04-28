@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.0 - 2026-04-28 22:20:43Z
+
+### 🚀 Features
+
+- *(tabs)* Add command to sort tabs by domain
+- *(tabs)* Add --background flag to open tab without activating it
+- *(tabs)* Add tab ID to tab summaries in windows list output
+- *(windows)* Add last-focused window indicator to windows list
+- *(cli)* Add window and tab matcher system for flexible selection
+- *(open)* Add --title-prefix, --if-title-prefix-does-not-exist,
+  --if-url-does-not-exist
+- *(tests)* Add WebDriver BiDi integration test framework
+- *(auth)* Replace strip_credentials with onAuthRequired credential injection
+- *(tests)* Add CLI tests for all window matching parameters
+- *(downloads)* Add download management commands and event streaming
+- *(tabs)* Add reload command with optional cache bypass
+- *(containers)* Add Firefox container support
+- *(containers)* Add container_name to tab listings and matching
+- Add Password newtype with zeroize, fix CLI argument bugs
+- Pre-release hardening — browser compat, robustness, Chrome keepalive, docs
+- Add window/tab properties, tab groups, Chrome compat, and test infra
+
+### 🚜 Refactor
+
+- Extract browser-controller-client library crate
+- Add newtype IDs, typed Client API, and mandatory timeout
+- Move event-stream filtering to mediator, narrow client re-exports
+- Rework matchers with value enums, derive_builder, and extension trait
+
+### ⚙️ Miscellaneous Tasks
+
+- *(dependencies)* Upgrade dependencies
+
 ## 0.1.5 - 2026-04-02T16:47:30Z
 
 No changes in this crate; see other browser-controller components.

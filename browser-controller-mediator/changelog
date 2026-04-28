@@ -1,3 +1,28 @@
+browser-controller-mediator (0.2.0-1) unstable; urgency=medium
+
+  * Features - tabs - Add command to sort tabs by domain
+  * Features - tabs - Add --background flag to open tab without activating it
+  * Features - tabs - Add tab ID to tab summaries in windows list output
+  * Features - windows - Add last-focused window indicator to windows list
+  * Features - cli - Add window and tab matcher system for flexible selection
+  * Features - open - Add --title-prefix, --if-title-prefix-does-not-exist, --if-url-does-not-exist
+  * Features - tests - Add WebDriver BiDi integration test framework
+  * Features - auth - Replace strip_credentials with onAuthRequired credential injection
+  * Features - tests - Add CLI tests for all window matching parameters
+  * Features - downloads - Add download management commands and event streaming
+  * Features - tabs - Add reload command with optional cache bypass
+  * Features - containers - Add Firefox container support
+  * Features - containers - Add container_name to tab listings and matching
+  * Features Add Password newtype with zeroize, fix CLI argument bugs
+  * Features Pre-release hardening — browser compat, robustness, Chrome keepalive, docs
+  * Features Add window/tab properties, tab groups, Chrome compat, and test infra
+  * Refactor Extract browser-controller-client library crate
+  * Refactor Add newtype IDs, typed Client API, and mandatory timeout
+  * Refactor Move event-stream filtering to mediator, narrow client re-exports
+  * Refactor Rework matchers with value enums, derive_builder, and extension trait
+  * Miscellaneous tasks - dependencies - Upgrade dependencies
+
+ -- Matthias Hörmann <mhoermann@gmail.com>  Wed, 29 Apr 2026 00:20:45 +0200
 browser-controller-mediator (0.1.5-1) unstable; urgency=medium
 
   * No changes in this package; see other browser-controller components.
