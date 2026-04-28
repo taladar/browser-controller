@@ -62,7 +62,7 @@ for p in "${workspace_crates[@]}"; do
     git cliff --prepend CHANGELOG.md -u -t "${p_tag_basename}_${version}"
   fi
   rm context.json
-  rumdl fmt --fix CHANGELOG.md
+  rumdl fmt CHANGELOG.md
   popd >/dev/null
 done
 
@@ -100,7 +100,7 @@ for p in "${workspace_binary_crates[@]}"; do
 done
 
 git cliff --prepend CHANGELOG.md -u -t "browser_controller_${workspace_version}"
-rumdl fmt --fix CHANGELOG.md
+rumdl fmt CHANGELOG.md
 
 cargo build
 
