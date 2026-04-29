@@ -4,7 +4,13 @@ use std::path::Path;
 
 use browser_controller_types::{BrowserEvent, CliCommand, CliRequest};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
-use tokio::net::UnixStream;
+
+/// Platform-specific bidirectional stream type for the mediator IPC channel.
+#[cfg(unix)]
+type IpcStream = tokio::net::UnixStream;
+/// Platform-specific bidirectional stream type for the mediator IPC channel.
+#[cfg(windows)]
+type IpcStream = tokio::net::windows::named_pipe::NamedPipeClient;
 
 /// Errors that can occur when working with the event stream.
 #[non_exhaustive]
@@ -42,9 +48,9 @@ pub enum EventStreamError {
 )]
 pub struct EventStream {
     /// Buffered reader for the event stream.
-    reader: BufReader<tokio::io::ReadHalf<UnixStream>>,
+    reader: BufReader<tokio::io::ReadHalf<IpcStream>>,
     /// Keep write half alive so the mediator doesn't observe EOF.
-    _write_half: tokio::io::WriteHalf<UnixStream>,
+    _write_half: tokio::io::WriteHalf<IpcStream>,
 }
 
 impl EventStream {
@@ -69,9 +75,18 @@ impl EventStream {
             },
         );
 
-        let stream = UnixStream::connect(socket_path)
+        #[cfg(unix)]
+        let stream = IpcStream::connect(socket_path)
             .await
             .map_err(EventStreamError::Connect)?;
+        #[cfg(windows)]
+        let stream = {
+            let pipe_name = crate::discovery::pipe_name_from_marker(socket_path)
+                .map_err(EventStreamError::Connect)?;
+            tokio::net::windows::named_pipe::ClientOptions::new()
+                .open(&pipe_name)
+                .map_err(EventStreamError::Connect)?
+        };
         let (read_half, mut write_half) = tokio::io::split(stream);
 
         let mut json = serde_json::to_vec(&request).map_err(EventStreamError::Serialize)?;

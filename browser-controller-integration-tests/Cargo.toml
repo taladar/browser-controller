@@ -12,7 +12,6 @@ browser-controller-client = { workspace = true }
 browser-controller-types = { path = "../browser-controller-types" }
 fs-err = { workspace = true }
 futures = "0.3"
-niri-ipc = "=25.11.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3"
@@ -22,6 +21,9 @@ tracing = { workspace = true }
 webdriverbidi = "0.2.2"
 which = "8"
 zip = { version = "8", default-features = false, features = ["deflate"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+niri-ipc = "=25.11.0"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

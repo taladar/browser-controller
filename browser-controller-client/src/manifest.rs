@@ -255,9 +255,9 @@ pub fn install_manifest(
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let (key, _) = hkcu
             .create_subkey(browser.windows_registry_key())
-            .map_err(|e| ManifestError::Registry(e.into()))?;
+            .map_err(ManifestError::Registry)?;
         key.set_value("", &manifest_path.to_string_lossy().as_ref())
-            .map_err(|e| ManifestError::Registry(e.into()))?;
+            .map_err(ManifestError::Registry)?;
     }
 
     Ok(InstallManifestResult {

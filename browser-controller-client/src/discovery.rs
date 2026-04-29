@@ -93,7 +93,8 @@ pub fn socket_dir() -> Result<PathBuf, DiscoveryError> {
     }
     #[cfg(target_os = "windows")]
     {
-        let local = std::env::var("LOCALAPPDATA").map_err(|_| DiscoveryError::NoRuntimeDir)?;
+        let local =
+            std::env::var("LOCALAPPDATA").map_err(|_not_set| DiscoveryError::NoRuntimeDir)?;
         Ok(Path::new(&local).join("Temp").join("browser-controller"))
     }
 }

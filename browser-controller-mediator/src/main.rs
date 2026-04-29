@@ -691,7 +691,7 @@ async fn run() -> Result<(), Error> {
     {
         let pipe_name = format!(r"\\.\pipe\browser-controller-{ppid_u32}");
         // Write an empty marker file for CLI discovery.
-        fs_err::write(&sock_path, &[])?;
+        fs_err::write(&sock_path, [])?;
         tracing::info!(
             path = %sock_path.display(),
             pipe = %pipe_name,
