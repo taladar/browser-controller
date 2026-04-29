@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 - 2026-04-29 08:55:03Z
+
+### 🐛 Bug Fixes
+
+- *(cross-platform)* Make workspace build on Windows and macOS
+
 ## 0.1.0 - 2026-04-28 22:20:43Z
 
 ### 🚀 Features

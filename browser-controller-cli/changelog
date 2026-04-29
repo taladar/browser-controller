@@ -1,3 +1,9 @@
+browser-controller-cli (0.2.1-1) unstable; urgency=medium
+
+  * No changes in this package; see other browser-controller components.
+
+ -- Matthias Hörmann <mhoermann@gmail.com>  Wed, 29 Apr 2026 10:55:04 +0200
+
 browser-controller-cli (0.2.0-1) unstable; urgency=medium
 
   * Features - tabs - Add command to sort tabs by domain

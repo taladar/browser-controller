@@ -9,7 +9,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Matthias Hörmann <mhoermann@gmail.com>"]
 edition = "2024"
 rust-version = "1.94.0"
@@ -18,8 +18,8 @@ publish = true
 repository = "https://github.com/taladar/browser-controller"
 
 [workspace.dependencies]
-browser-controller-client = { path = "browser-controller-client", version = "0.2.0" }
-browser-controller-types = { path = "browser-controller-types", version = "0.2.0" }
+browser-controller-client = { path = "browser-controller-client", version = "0.2.1" }
+browser-controller-types = { path = "browser-controller-types", version = "0.2.1" }
 clap = { version = "4.6.1", features = ["derive", "cargo"] }
 clap_complete = "4.6.3"
 clap_mangen = "0.3.0"

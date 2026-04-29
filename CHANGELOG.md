@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 - 2026-04-29 08:55:04Z
+
+### 🐛 Bug Fixes
+
+- *(release)* Bump extension/manifest.chrome.json alongside manifest.json
+- *(cross-platform)* Make workspace build on Windows and macOS
+
+### ⚙️ Miscellaneous Tasks
+
+- *(hooks)* Skip semver-violations check on integration tests Cargo.toml
+
 ## 0.2.0 - 2026-04-28 22:20:45Z
 
 ### 🚀 Features

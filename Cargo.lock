@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "browser-controller-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "browser-controller-client",
  "clap",
@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "browser-controller-client"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "browser-controller-types",
  "derive_builder",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "browser-controller-integration-tests"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "browser-controller-client",
  "browser-controller-types",
@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "browser-controller-mediator"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "browser-controller-client",
  "browser-controller-types",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "browser-controller-types"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "pretty_assertions",
  "serde",
