@@ -43,8 +43,11 @@ cargo set-version --bump "${level}"
 # CHANGELOG, and the workspace-level release tag.
 workspace_version="$(cargo get workspace.package.version)"
 
-# Update extension/manifest.json to match the new workspace version.
+# Update extension manifests to match the new workspace version.
+# Both the Firefox manifest (manifest.json) and the Chrome manifest
+# (manifest.chrome.json, used by package-extension.sh for the .zip) need bumping.
 jq --arg v "${workspace_version}" '.version = $v' extension/manifest.json | sponge extension/manifest.json
+jq --arg v "${workspace_version}" '.version = $v' extension/manifest.chrome.json | sponge extension/manifest.chrome.json
 
 for p in "${workspace_crates[@]}"; do
   p_tag_basename="${p//-/_}"
@@ -106,7 +109,7 @@ cargo build
 
 "$(dirname "${BASH_SOURCE[0]}")/package-extension.sh"
 
-git add Cargo.toml Cargo.lock CHANGELOG.md extension/manifest.json
+git add Cargo.toml Cargo.lock CHANGELOG.md extension/manifest.json extension/manifest.chrome.json
 
 for p in "${workspace_crates[@]}"; do
   pushd "${p}" >/dev/null
