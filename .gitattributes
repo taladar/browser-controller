@@ -1,0 +1,1 @@
+browser-controller-integration-tests/Cargo.toml skipchecks=rust:::lib:::semver-violations;;;integration[[space]]test[[space]]crate,[[space]]not[[space]]published,[[space]]public[[space]]API[[space]]stability[[space]]does[[space]]not[[space]]matter
