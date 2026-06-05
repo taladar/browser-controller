@@ -255,7 +255,8 @@ zero_sized_map_values = "deny"
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 missing_crate_level_docs = "warn"
-unescaped_backticks = "warn"
+private_intra_doc_links = "deny"
+unescaped_backticks = "deny"
 
 [profile.release]
 # do not strip debug info from release builds, useful for debugging those, cargo-flamegraph profiling or similar use cases

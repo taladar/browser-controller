@@ -222,7 +222,7 @@ pub fn prepared_extension_dir(browser: browser::Kind) -> Result<PreparedExtensio
 /// The corresponding extension ID is [`TEST_CHROME_EXTENSION_ID`].
 const TEST_CHROME_EXTENSION_KEY: &str = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAudKxEwE1m/8nloKiVO3Jc/q3q0WS50wy9i9LoatVFf2RuvQuwSokmbZgPicSDRLreICozqNb38s1rxYEuDUsj21ciUKXhIv98aovOru6O5ZLAMM9+qAnFAL94DkbO/IF4t9NDg62aChnnPgScBUQPvbIQdaZxF265aoqkxRG7tDCu2rYdXH0p0LMV8kZdMNyEttqC0QWKZCUgt1iZ9GLNnuJK1TDtB1KOISeAMF39UxgK8a6yAyl1QNabztCnanK2mkBDzO+O5E3BYMgnLCp7JXiJovIm2ZSyQhaPZZBSHEeD7H5bLZi3i2/qY/n8Eq4v5vOomDWbqQ9nCBbFF8gTQIDAQAB";
 
-/// The Chrome extension ID corresponding to [`TEST_CHROME_EXTENSION_KEY`].
+/// The Chrome extension ID corresponding to `TEST_CHROME_EXTENSION_KEY`.
 ///
 /// Derived from the SHA-256 of the DER-encoded public key, with each nibble
 /// mapped to `a`-`p`.
