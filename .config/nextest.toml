@@ -4,5 +4,5 @@
 max-threads = 1
 
 [[profile.default.overrides]]
-filter = 'package(browser-controller-integration-tests)'
-test-group = 'integration-tests'
+filter = "package(browser-controller-integration-tests)"
+test-group = "integration-tests"
