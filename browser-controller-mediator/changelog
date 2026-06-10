@@ -1,3 +1,10 @@
+browser-controller-mediator (0.2.2-1) unstable; urgency=medium
+
+  * Styling - toml - Apply tombi formatting to deny.toml and nextest.toml
+  * Miscellaneous tasks - template - Sync lint config from cargo-generate template
+  * Miscellaneous tasks - dependencies - Update dependencies
+
+ -- Matthias Hörmann <mhoermann@gmail.com>  Wed, 10 Jun 2026 12:43:58 +0200
 browser-controller-mediator (0.2.1-1) unstable; urgency=medium
 
   * Bug fixes - cross-platform - Make workspace build on Windows and macOS

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.2 - 2026-06-10 10:43:58Z
+
+### 🎨 Styling
+
+- *(toml)* Apply tombi formatting to deny.toml and nextest.toml
+
+### ⚙️ Miscellaneous Tasks
+
+- *(template)* Sync lint config from cargo-generate template
+- *(dependencies)* Update dependencies
+
 ## 0.2.1 - 2026-04-29T08:55:03Z
 
 No changes in this crate; see other browser-controller components.
