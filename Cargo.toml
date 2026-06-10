@@ -21,7 +21,7 @@ repository = "https://github.com/taladar/browser-controller"
 browser-controller-client = { path = "browser-controller-client", version = "0.2.1" }
 browser-controller-types = { path = "browser-controller-types", version = "0.2.1" }
 clap = { version = "4.6.1", features = ["derive", "cargo"] }
-clap_complete = "4.6.3"
+clap_complete = "4.6.5"
 clap_mangen = "0.3.0"
 derive_builder = "0.20"
 directories = "6.0"
@@ -35,7 +35,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0.18"
 time = { version = "0.3.47", features = ["macros", "parsing"] }
-tokio = { version = "1.52.1", features = ["full"] }
+tokio = { version = "1.52.3", features = ["full"] }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-journald = "0.3.2"

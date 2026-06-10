@@ -12,12 +12,12 @@ readme = "README.md"
 keywords = ["browser", "automation", "native-messaging", "firefox", "chrome"]
 categories = ["command-line-utilities"]
 exclude = [
-  ".env",
-  "cliff.toml",
-  "cliff-debian.toml",
-  "maintainer-scripts",
-  "tarpaulin-report.html",
-  "tarpaulin-report.json",
+    ".env",
+    "cliff.toml",
+    "cliff-debian.toml",
+    "maintainer-scripts",
+    "tarpaulin-report.html",
+    "tarpaulin-report.json",
 ]
 
 [package.metadata.deb]
@@ -39,7 +39,7 @@ browser-controller-mediator = { path = "/usr/bin/browser-controller-mediator" }
 
 [package.metadata.generate-rpm]
 assets = [
-  { source = "target/release/browser-controller-mediator", dest = "/usr/bin/browser-controller-mediator", mode = "755" },
+    { source = "target/release/browser-controller-mediator", dest = "/usr/bin/browser-controller-mediator", mode = "755" },
 ]
 
 [[bin]]

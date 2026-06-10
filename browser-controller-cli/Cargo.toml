@@ -12,12 +12,12 @@ keywords = ["browser", "automation", "firefox", "chrome", "tabs"]
 categories = ["command-line-utilities"]
 readme = "README.md"
 exclude = [
-  ".env",
-  "cliff.toml",
-  "cliff-debian.toml",
-  "maintainer-scripts",
-  "tarpaulin-report.html",
-  "tarpaulin-report.json",
+    ".env",
+    "cliff.toml",
+    "cliff-debian.toml",
+    "maintainer-scripts",
+    "tarpaulin-report.html",
+    "tarpaulin-report.json",
 ]
 
 [package.metadata.deb]
@@ -39,7 +39,7 @@ browser-controller = { path = "/usr/bin/browser-controller" }
 
 [package.metadata.generate-rpm]
 assets = [
-  { source = "target/release/browser-controller", dest = "/usr/bin/browser-controller", mode = "755" },
+    { source = "target/release/browser-controller", dest = "/usr/bin/browser-controller", mode = "755" },
 ]
 
 [[bin]]
