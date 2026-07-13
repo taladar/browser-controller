@@ -783,37 +783,144 @@ async function cmdListTabs(windowId) {
 }
 
 /**
- * Wait for a specific tab to reach "complete" status, with a timeout.
+ * Wait for a freshly-opened tab to finish loading and return its final tab
+ * object.
  *
- * Resolves immediately if the tab is already complete; otherwise waits for
- * the next tabs.onUpdated event that sets status to "complete" for this tab.
- * If the timeout elapses before the tab completes, resolves anyway so the
- * caller can return the tab in whatever state it is in.
+ * Handles two subtleties that make a naive "wait for status === complete on
+ * this tab id" unreliable:
  *
- * @param {number} tabId
+ *   1. A newly-created tab briefly reports `status: "complete"` for its
+ *      initial `about:blank` document *before* it navigates to the requested
+ *      URL. When a real URL was requested we must not treat that transient
+ *      blank state as loaded, otherwise we return an unloaded tab.
+ *
+ *   2. An extension such as Multi-Account Containers ("Always open this site
+ *      in <container>") reacts to the navigation by *closing* the tab and
+ *      *creating a new one* in the target container, which assigns a new tab
+ *      id. We follow that reopen: when the tracked tab is removed we adopt the
+ *      newly-created tab that targets the same URL and keep waiting on it.
+ *
+ * If the timeout elapses the current tab is returned in whatever state it is
+ * in (mirroring the previous behaviour). Returns null only if the tab was
+ * closed and no replacement targeting `expectUrl` appeared before the timeout.
+ *
+ * @param {object} initialTab  The tab object returned by tabs.create/move.
+ * @param {string|null} expectUrl  URL the tab was opened with (credentials
+ *   stripped), or null when opening a blank tab.
  * @param {number} timeoutMs  Maximum time to wait in milliseconds.
- * @returns {Promise<void>}
+ * @returns {Promise<object|null>}
  */
-async function waitForTabComplete(tabId, timeoutMs) {
-  const current = await browser.tabs.get(tabId);
-  if (current.status === "complete") {
-    return;
+async function waitForOpenedTabLoad(initialTab, expectUrl, timeoutMs) {
+  const requireRealUrl = expectUrl !== null && expectUrl !== "about:blank";
+  let currentTabId = initialTab.id;
+
+  // Only tabs created *during* this operation can be the container-reopen
+  // replacement; pre-existing tabs with the same URL must never be adopted.
+  const preexisting = new Set((await browser.tabs.query({})).map((t) => t.id));
+  preexisting.delete(currentTabId);
+
+  const isLoaded = (tab) => {
+    if (!tab || tab.status !== "complete") return false;
+    // Ignore the transient initial about:blank document (subtlety 1).
+    if (requireRealUrl && (!tab.url || tab.url === "about:blank")) return false;
+    return true;
+  };
+  // Match on origin + pathname so query-string / redirect differences and URL
+  // re-encoding don't defeat replacement detection.
+  const matchesUrl = (url) => {
+    if (!requireRealUrl || !url) return false;
+    try {
+      const a = new URL(url);
+      const b = new URL(expectUrl);
+      return a.origin === b.origin && a.pathname === b.pathname;
+    } catch (_e) {
+      return url === expectUrl;
+    }
+  };
+
+  // Fast path: already fully loaded.
+  try {
+    const cur = await browser.tabs.get(currentTabId);
+    if (isLoaded(cur)) return cur;
+  } catch (_e) {
+    // Tab already gone (e.g. reopened before we looked); the listeners below
+    // will locate the replacement.
   }
-  await new Promise((resolve) => {
-    const timer = setTimeout(() => {
+
+  return await new Promise((resolve) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
       browser.tabs.onUpdated.removeListener(onUpdated);
-      resolve();
+      browser.tabs.onRemoved.removeListener(onRemoved);
+      browser.tabs.onCreated.removeListener(onCreated);
+    };
+    const finish = async (tab) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      // Re-fetch for a fresh, complete tab object (event copies can be partial
+      // and the id may have changed via a reopen). Keep the event copy if the
+      // tab vanished between the event and now.
+      if (tab) {
+        try {
+          tab = await browser.tabs.get(tab.id);
+        } catch (_e) {
+          /* keep the event copy */
+        }
+      }
+      resolve(tab ?? null);
+    };
+    const adopt = (tab) => {
+      currentTabId = tab.id;
+      if (isLoaded(tab)) finish(tab);
+    };
+
+    const timer = setTimeout(async () => {
+      // Timed out: return the tracked tab, or a replacement targeting the
+      // requested URL if the tracked tab is gone.
+      let tab = null;
+      try {
+        tab = await browser.tabs.get(currentTabId);
+      } catch (_e) {
+        const all = await browser.tabs.query({});
+        tab = all.find((t) => !preexisting.has(t.id) && matchesUrl(t.url)) ?? null;
+      }
+      finish(tab);
     }, timeoutMs);
-    function onUpdated(updatedTabId, changeInfo) {
-      if (updatedTabId === tabId && changeInfo.status === "complete") {
-        clearTimeout(timer);
-        browser.tabs.onUpdated.removeListener(onUpdated);
-        resolve();
+
+    function onUpdated(tabId, _changeInfo, tab) {
+      if (tabId === currentTabId) {
+        if (isLoaded(tab)) finish(tab);
+        return;
+      }
+      // A tab created during this operation navigated to our URL: it is the
+      // container-reopen replacement. Adopt it and keep waiting for it to load.
+      if (!preexisting.has(tabId) && matchesUrl(tab.url)) adopt(tab);
+    }
+
+    async function onRemoved(tabId) {
+      if (tabId !== currentTabId) return;
+      // The tracked tab was closed — most likely reopened in another
+      // container. Adopt an already-present replacement if there is one;
+      // otherwise onCreated/onUpdated will surface it as it navigates.
+      const all = await browser.tabs.query({});
+      const repl = all.find((t) => !preexisting.has(t.id) && matchesUrl(t.url));
+      if (repl) adopt(repl);
+    }
+
+    function onCreated(tab) {
+      // Container reopen may create the tab with the URL already set.
+      if (tab.id !== currentTabId && !preexisting.has(tab.id) && matchesUrl(tab.url)) {
+        adopt(tab);
       }
     }
-    // Note: the filter parameter ({ tabId, properties }) is Firefox-only.
-    // Chrome does not support it, so we filter inside the callback instead.
+
+    // Note: the onUpdated filter parameter ({ tabId, properties }) is
+    // Firefox-only; we filter inside the callback so this works on Chrome too.
     browser.tabs.onUpdated.addListener(onUpdated);
+    browser.tabs.onRemoved.addListener(onRemoved);
+    browser.tabs.onCreated.addListener(onCreated);
   });
 }
 
@@ -888,10 +995,15 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, us
     setTimeout(() => { pendingCredentials.delete(key); }, 30_000);
   }
 
-  // Optionally wait for the tab to finish loading before returning.
+  // Optionally wait for the tab to finish loading before returning. This
+  // follows the tab if an extension (e.g. Multi-Account Containers) closes it
+  // and reopens the URL in a different container mid-load, changing its id.
   if (waitForLoadTimeoutMs !== null) {
-    await waitForTabComplete(tab.id, waitForLoadTimeoutMs);
-    tab = await browser.tabs.get(tab.id);
+    const loaded = await waitForOpenedTabLoad(tab, cleanUrl, waitForLoadTimeoutMs);
+    if (loaded === null) {
+      throw new Error("Opened tab was closed before it finished loading");
+    }
+    tab = loaded;
   }
 
   return { type: "Tab", ...await serializeTabDetails(tab) };
