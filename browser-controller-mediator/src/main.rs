@@ -38,6 +38,20 @@ pub enum Error {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    /// A complete native message was read from the extension but could not be
+    /// deserialized.
+    ///
+    /// The length prefix and body were fully consumed, so the stream is still in
+    /// sync and later messages can be read normally; only this one is lost.
+    #[error("invalid native message from extension (request ID {request_id:?}): {source}")]
+    InvalidNativeMessage {
+        /// The `request_id` of the message, if it could be extracted from the raw
+        /// JSON, so the error can be routed to the waiting CLI client.
+        request_id: Option<String>,
+        /// The underlying deserialization error.
+        source: serde_json::Error,
+    },
+
     /// The runtime/temp directory cannot be determined.
     #[error("cannot determine runtime/temp directory for IPC socket")]
     NoRuntimeDir,
@@ -116,8 +130,10 @@ impl BiDiStream for Box<dyn BiDiStream> {}
 ///
 /// # Errors
 ///
-/// Returns an error if reading from `reader` fails, the message exceeds
-/// [`MAX_NATIVE_MESSAGE_SIZE`], or the JSON cannot be deserialized.
+/// Returns an error if reading from `reader` fails or the message exceeds
+/// [`MAX_NATIVE_MESSAGE_SIZE`]. Returns [`Error::InvalidNativeMessage`] if the
+/// JSON cannot be deserialized; that error is recoverable since the whole
+/// message was consumed.
 async fn read_native_message(
     reader: &mut tokio::io::Stdin,
 ) -> Result<Option<ExtensionMessage>, Error> {
@@ -142,9 +158,22 @@ async fn read_native_message(
             json = %json_str,
             "Failed to deserialize native message from extension",
         );
-        Error::Json(e)
+        Error::InvalidNativeMessage {
+            request_id: extract_request_id(&json_buf),
+            source: e,
+        }
     })?;
     Ok(Some(msg))
+}
+
+/// Extract the top-level `request_id` string from a raw JSON message that
+/// failed to deserialize into an [`ExtensionMessage`].
+///
+/// Returns `None` if the message is not valid JSON at all or has no string
+/// `request_id` field (e.g. events).
+fn extract_request_id(json: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(json).ok()?;
+    value.get("request_id")?.as_str().map(ToOwned::to_owned)
 }
 
 /// Write one length-prefixed JSON message to a native messaging stdout stream.
@@ -752,7 +781,11 @@ async fn run() -> Result<(), Error> {
     tokio::spawn(async move {
         loop {
             let result = read_native_message(&mut stdin).await;
-            let is_done = matches!(result, Ok(None) | Err(_));
+            // An undeserializable message was fully consumed, so keep reading.
+            let is_done = match &result {
+                Ok(Some(_)) | Err(Error::InvalidNativeMessage { .. }) => false,
+                Ok(None) | Err(_) => true,
+            };
             if ext_msg_tx.send(result).await.is_err() {
                 break;
             }
@@ -865,6 +898,26 @@ async fn run() -> Result<(), Error> {
                     Some(Ok(None)) | None => {
                         tracing::info!("Extension disconnected; shutting down");
                         break;
+                    }
+                    Some(Err(Error::InvalidNativeMessage { request_id, source })) => {
+                        // Fail only the affected request (if any) instead of
+                        // shutting down and failing every pending request.
+                        match request_id.and_then(|id| pending.remove(&id).map(|tx| (id, tx))) {
+                            Some((request_id, tx)) => {
+                                tracing::warn!(
+                                    request_id = %request_id,
+                                    "Failing request whose response could not be deserialized",
+                                );
+                                drop(tx.send(CliOutcome::Err(format!(
+                                    "invalid response from extension: {source}"
+                                ))));
+                            }
+                            None => {
+                                tracing::warn!(
+                                    "Ignoring undeserializable extension message not matching a pending request",
+                                );
+                            }
+                        }
                     }
                     Some(Err(e)) => {
                         tracing::error!(error = %e, "Error reading from extension; shutting down");
