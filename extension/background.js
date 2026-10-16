@@ -1615,7 +1615,9 @@ async function getTabHistoryInfo(tabId, isDiscarded) {
             total: entries.length,
             back: pos,
             forward: entries.length - 1 - pos,
-            hidden: jointTotal - entries.length,
+            // history.length can be smaller than entries.length (e.g. long
+            // same-document SPA histories), which would yield a negative count.
+            hidden: Math.max(0, jointTotal - entries.length),
           };
         }
         return { total: jointTotal, back: null, forward: null, hidden: null };
