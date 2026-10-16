@@ -1611,12 +1611,20 @@ async function getTabHistoryInfo(tabId, isDiscarded) {
         if (window.navigation?.entries) {
           const entries = window.navigation.entries();
           const pos = window.navigation.currentEntry.index;
+          // Firefox caps session history at browser.sessionhistory.max_entries
+          // (default 50) by purging the oldest entries, but does not remove
+          // them from navigation.entries(), which is only resynced on
+          // cross-document loads. After many same-document navigations the
+          // entries list (and currentEntry.index) therefore include purged
+          // entries that history.back() can no longer reach, and
+          // history.length can be smaller than entries.length. Purged entries
+          // are always the oldest, so discount them from the back count (exact
+          // unless iframe entries in history.length mask some of them).
+          const purged = Math.max(0, entries.length - jointTotal);
           return {
             total: entries.length,
-            back: pos,
+            back: Math.max(0, pos - purged),
             forward: entries.length - 1 - pos,
-            // history.length can be smaller than entries.length (e.g. long
-            // same-document SPA histories), which would yield a negative count.
             hidden: Math.max(0, jointTotal - entries.length),
           };
         }
