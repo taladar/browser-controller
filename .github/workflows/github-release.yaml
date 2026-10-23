@@ -21,6 +21,10 @@ jobs:
           prefix: 'browser_controller_'
           # Path to workspace changelog for the release body.
           changelog: CHANGELOG.md
+          # (optional) Create the release as a draft; the publish-release job
+          # publishes it once every asset is uploaded, so subscribers are only
+          # notified about a complete release.
+          draft: true
           # (required) GitHub token for creating GitHub Releases.
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Package browser extension
@@ -82,3 +86,16 @@ jobs:
           target: ${{ matrix.target }}
           # (required) GitHub token for uploading assets to GitHub Releases.
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-release:
+    needs: upload-assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: gh release edit "$REF_NAME" --repo "$REPOSITORY" --draft=false
