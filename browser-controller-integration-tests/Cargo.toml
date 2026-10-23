@@ -19,7 +19,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 webdriverbidi = "0.2.2"
 which = "8"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 niri-ipc = "=25.11.0"
