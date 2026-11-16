@@ -1,3 +1,11 @@
+browser-controller-mediator (0.2.3-1) unstable; urgency=medium
+
+  * Bug fixes - mediator - Survive undeserializable messages from the extension
+  * Miscellaneous tasks - dependencies - Update dependencies
+  * Miscellaneous tasks - dependencies - Update dependencies
+  * Miscellaneous tasks - dependencies - Update dependencies
+
+ -- Matthias Hörmann <mhoermann@gmail.com>  Mon, 16 Nov 2026 16:21:34 +0100
 browser-controller-mediator (0.2.2-1) unstable; urgency=medium
 
   * Styling - toml - Apply tombi formatting to deny.toml and nextest.toml

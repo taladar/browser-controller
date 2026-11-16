@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.3 - 2026-11-16 15:21:34Z
+
+### 🐛 Bug Fixes
+
+- *(extension)* Follow container reopen and wait past about:blank in tabs open
+- *(mediator)* Survive undeserializable messages from the extension
+- *(extension)* Never report a negative history_hidden_count
+- *(extension)* Discount purged session history from history_steps_back
+
+### ⚙️ Miscellaneous Tasks
+
+- *(dependencies)* Update dependencies
+- Publish GitHub releases only after all assets are uploaded
+- *(dependencies)* Update dependencies
+- *(dependencies)* Update dependencies
+
 ## 0.2.2 - 2026-06-10 10:43:58Z
 
 ### 🎨 Styling

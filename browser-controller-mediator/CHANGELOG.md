@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.3 - 2026-11-16 15:21:33Z
+
+### 🐛 Bug Fixes
+
+- *(mediator)* Survive undeserializable messages from the extension
+
+### ⚙️ Miscellaneous Tasks
+
+- *(dependencies)* Update dependencies
+- *(dependencies)* Update dependencies
+- *(dependencies)* Update dependencies
+
 ## 0.2.2 - 2026-06-10 10:43:58Z
 
 ### 🎨 Styling
