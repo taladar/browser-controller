@@ -1624,7 +1624,11 @@ async function getTabHistoryInfo(tabId, isDiscarded) {
           return {
             total: entries.length,
             back: Math.max(0, pos - purged),
-            forward: entries.length - 1 - pos,
+            // currentEntry.index can run ahead of the entries list after
+            // Firefox purged old entries (seen as -50 with the default cap of
+            // 50), so clamp like the other counts: the Rust side expects a
+            // u32 and a negative value made the whole tab list unparsable.
+            forward: Math.max(0, entries.length - 1 - pos),
             hidden: Math.max(0, jointTotal - entries.length),
           };
         }
