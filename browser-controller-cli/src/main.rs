@@ -237,13 +237,23 @@ impl From<TabStatusArg> for TabStatus {
     }
 }
 
-/// Parse a duration string via [`humantime`] and reject zero durations.
+/// Parse a human readable duration string (e.g. `30s`, `5m`, `1m30s`) and reject zero
+/// durations.
 fn parse_nonzero_duration(s: &str) -> Result<Duration, String> {
-    let d: humantime::Duration = s.parse().map_err(|e| format!("{e}"))?;
+    let d = fundu::DurationParser::builder()
+        .all_time_units()
+        .allow_time_unit_delimiter()
+        .parse_multiple(None)
+        .disable_exponent()
+        .disable_infinity()
+        .build()
+        .parse(s)
+        .map_err(|e| format!("{e}"))?;
+    let d = Duration::try_from(d).map_err(|e| format!("{e}"))?;
     if d.is_zero() {
         return Err("timeout must be greater than zero".to_owned());
     }
-    Ok(*d)
+    Ok(d)
 }
 
 /// Criteria for selecting one or more browser windows (CLI argument type).

@@ -26,13 +26,13 @@ clap_mangen = "0.3.3"
 derive_builder = "0.20"
 directories = "6.0"
 fs-err = "3.3"
-humantime = "2.4.0"
+fundu = "2.1.1"
 log-panics = { version = "2.1.0", features = ["with-backtrace"] }
-sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 pretty_assertions = "1.4.1"
 regex = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["macros", "parsing"] }
 tokio = { version = "1.54.1", features = ["full"] }
