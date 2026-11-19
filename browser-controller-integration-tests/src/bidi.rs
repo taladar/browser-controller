@@ -109,15 +109,28 @@ fn build_capabilities(
     }
 }
 
+/// Window class / Wayland app-id given to every test browser.
+///
+/// Lets window managers tell test browsers apart from the user's production
+/// browsers (e.g. a niri `window-rule` matching `app-id="^browser-controller-test$"`
+/// to move them to a dedicated workspace).
+pub const TEST_BROWSER_APP_ID: &str = "browser-controller-test";
+
 /// Build Firefox-specific capabilities.
 ///
 /// Sets `moz:firefoxOptions` with a custom profile path so the test browser
-/// does not interfere with the user's production Firefox.
+/// does not interfere with the user's production Firefox, and a distinct
+/// app-id (`--name`) so its windows can be distinguished by the compositor.
 fn build_firefox_capabilities(profile_path: &std::path::Path) -> CapabilitiesRequest {
     let mut caps = CapabilitiesRequest::default();
 
     let firefox_options = serde_json::json!({
-        "args": ["-profile", profile_path.to_string_lossy()],
+        "args": [
+            "-profile",
+            profile_path.to_string_lossy(),
+            "--name",
+            TEST_BROWSER_APP_ID
+        ],
         "prefs": {
             "browser.shell.checkDefaultBrowser": false,
             "browser.startup.homepage_override.mstone": "ignore",
@@ -146,6 +159,8 @@ fn build_chrome_capabilities(
 
     let mut args = vec![
         format!("--user-data-dir={}", profile_path.display()),
+        // Distinct WM class / Wayland app-id, see `TEST_BROWSER_APP_ID`.
+        format!("--class={TEST_BROWSER_APP_ID}"),
         "--no-first-run".to_owned(),
         "--disable-default-apps".to_owned(),
         // Allow autoplay without user gesture so audio tests work.
