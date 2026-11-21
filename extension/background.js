@@ -648,6 +648,8 @@ async function dispatch(commandType, params) {
       return cmdUnmuteTab(params.tab_id);
     case "MoveTab":
       return cmdMoveTab(params.tab_id, params.new_index);
+    case "MoveTabToWindow":
+      return cmdMoveTabToWindow(params.tab_id, params.window_id, params.new_index ?? null);
     case "ListContainers":
       return cmdListContainers();
     case "ReopenTabInContainer":
@@ -1207,6 +1209,21 @@ async function cmdMoveTab(tabId, newIndex) {
   const result = await browser.tabs.move(tabId, { index: newIndex });
   // Chrome returns a single Tab when moving one tab; Firefox returns an array.
   const moved = Array.isArray(result) ? result[0] : result;
+  return { type: "Tab", ...await serializeTabDetails(moved) };
+}
+
+/**
+ * Moves a tab to another window, at the end when newIndex is null, and returns
+ * its updated details.
+ */
+async function cmdMoveTabToWindow(tabId, windowId, newIndex) {
+  const result = await browser.tabs.move(tabId, { windowId, index: newIndex ?? -1 });
+  // Chrome returns a single Tab when moving one tab; Firefox returns an array,
+  // which is empty when it refuses the move (e.g. private to non-private window).
+  const moved = Array.isArray(result) ? result[0] : result;
+  if (moved === undefined || moved.windowId !== windowId) {
+    throw new Error(`Browser refused to move tab ${tabId} to window ${windowId}`);
+  }
   return { type: "Tab", ...await serializeTabDetails(moved) };
 }
 

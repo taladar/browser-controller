@@ -67,7 +67,7 @@ browser-controller install-manifest --browser chrome --extension-id <id>
 | `tabs warmup` | Warm up discarded tabs without activating (Firefox-only) |
 | `tabs mute` | Mute one or more tabs |
 | `tabs unmute` | Unmute one or more tabs |
-| `tabs move` | Move a tab to a new position |
+| `tabs move` | Move a tab to a new position or, with `--to-window-id`, to another window |
 | `tabs back` | Navigate backward in session history |
 | `tabs forward` | Navigate forward in session history |
 | `tabs sort` | Sort tabs by domain order |

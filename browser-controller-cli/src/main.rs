@@ -957,7 +957,7 @@ pub enum TabsCommand {
         #[clap(flatten)]
         tab: CliTabMatcher,
     },
-    /// Move a tab to a new position within its window.
+    /// Move a tab to a new position within its window or to another window.
     Move {
         /// Criteria selecting the window(s) to search for tabs.
         #[clap(flatten)]
@@ -966,8 +966,14 @@ pub enum TabsCommand {
         #[clap(flatten)]
         tab: CliTabMatcher,
         /// New zero-based index for the tab within its window.
+        ///
+        /// Required unless `--to-window-id` is given, in which case omitting it
+        /// places the tab at the end of the target window.
+        #[clap(long, required_unless_present = "to_window_id")]
+        new_index: Option<u32>,
+        /// Move the tab to the window with this ID, keeping its history and page state.
         #[clap(long)]
-        new_index: u32,
+        to_window_id: Option<WindowId>,
     },
     /// Navigate backward in a tab's session history.
     Back {
@@ -2230,12 +2236,26 @@ async fn execute_command(cli: Cli, instance: &DiscoveredInstance) -> Result<(), 
                 window,
                 tab,
                 new_index,
+                to_window_id,
             } => {
                 let tab_ids = client
                     .resolve_tabs(&((&window).try_into()?), &((&tab).try_into()?))
                     .await?;
+                let mut target_index = new_index;
                 for tab_id in tab_ids {
-                    let tab = client.move_tab(tab_id, new_index).await?;
+                    let tab = match (to_window_id, target_index) {
+                        (Some(target_window), index) => {
+                            let moved = client
+                                .move_tab_to_window(tab_id, target_window, index)
+                                .await?;
+                            // Keep several matched tabs in their original order.
+                            target_index = index.map(|_| moved.index.saturating_add(1));
+                            moved
+                        }
+                        (None, Some(index)) => client.move_tab(tab_id, index).await?,
+                        // clap requires --new-index when --to-window-id is absent.
+                        (None, None) => continue,
+                    };
                     print_result(&CliResult::Tab(tab), cli.output)?;
                 }
             }

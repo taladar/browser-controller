@@ -1607,6 +1607,21 @@ pub enum CliCommand {
         /// The tab IDs to ungroup.
         tab_ids: Vec<TabId>,
     },
+    /// Move a tab to a different window, keeping its history and page state.
+    ///
+    /// This is a separate command from [`CliCommand::MoveTab`] so that an older
+    /// extension rejects it as unknown instead of reordering the tab within its
+    /// current window.
+    MoveTabToWindow {
+        /// The ID of the tab to move.
+        tab_id: TabId,
+        /// The window to move the tab to.
+        window_id: WindowId,
+        /// The zero-based index in the target window. If `None`, the tab is
+        /// placed at the end.
+        #[serde(default)]
+        new_index: Option<u32>,
+    },
 }
 
 /// A request sent from the CLI to the mediator.

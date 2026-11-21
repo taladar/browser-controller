@@ -232,6 +232,76 @@ async fn move_tab_chrome() {
     harness::run(browser::Kind::Chrome, |h| Box::pin(move_tab_body(h))).await;
 }
 
+/// Shared test body for moving a tab to another window.
+async fn move_tab_to_window_body(h: &Harness) {
+    let source_window = first_window_id(h).await;
+    let target_window = h
+        .client()
+        .open_window(None, false)
+        .await
+        .expect("OpenWindow should succeed");
+    let appended = open_test_tab(h, source_window).await;
+    let inserted = open_test_tab(h, source_window).await;
+
+    let moved = h
+        .client()
+        .move_tab_to_window(appended, target_window, None)
+        .await
+        .expect("MoveTabToWindow without index should succeed");
+    pretty_assertions::assert_eq!(moved.window_id, target_window);
+    let target_tabs = h
+        .client()
+        .list_tabs(target_window)
+        .await
+        .expect("ListTabs should succeed");
+    pretty_assertions::assert_eq!(
+        target_tabs.last().map(|t| t.id),
+        Some(appended),
+        "tab should be appended to the target window"
+    );
+
+    let moved = h
+        .client()
+        .move_tab_to_window(inserted, target_window, Some(0))
+        .await
+        .expect("MoveTabToWindow with index should succeed");
+    pretty_assertions::assert_eq!(moved.window_id, target_window);
+    pretty_assertions::assert_eq!(moved.index, 0, "tab should be at the requested index");
+
+    let source_tabs = h
+        .client()
+        .list_tabs(source_window)
+        .await
+        .expect("ListTabs should succeed");
+    assert!(
+        source_tabs
+            .iter()
+            .all(|t| t.id != appended && t.id != inserted),
+        "moved tabs should have left the source window"
+    );
+
+    h.client()
+        .close_window(target_window)
+        .await
+        .expect("CloseWindow should succeed");
+}
+
+#[tokio::test]
+async fn move_tab_to_window_firefox() {
+    harness::run(browser::Kind::Firefox, |h| {
+        Box::pin(move_tab_to_window_body(h))
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn move_tab_to_window_chrome() {
+    harness::run(browser::Kind::Chrome, |h| {
+        Box::pin(move_tab_to_window_body(h))
+    })
+    .await;
+}
+
 /// Shared discard/warmup test body.
 async fn discard_warmup_body(h: &Harness) {
     let server = test_server::Server::start_plain();

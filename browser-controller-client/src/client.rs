@@ -464,6 +464,38 @@ impl Client {
         }
     }
 
+    /// Move a tab to a different window, keeping its history and page state.
+    ///
+    /// When `new_index` is `None`, the tab is placed at the end of the window.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command fails, for example because the browser
+    /// refuses to move a tab between a private and a non-private window or the
+    /// extension is too old to support this command, or if it returns an
+    /// unexpected response.
+    pub async fn move_tab_to_window(
+        &self,
+        tab_id: TabId,
+        window_id: WindowId,
+        new_index: Option<u32>,
+    ) -> CmdResult<TabDetails> {
+        match self
+            .execute(CliCommand::MoveTabToWindow {
+                tab_id,
+                window_id,
+                new_index,
+            })
+            .await?
+        {
+            CliResult::Tab(details) => Ok(details),
+            other => Err(CommandError::UnexpectedResponse {
+                expected: "Tab",
+                actual: Box::new(other),
+            }),
+        }
+    }
+
     /// Navigate backward in a tab's session history.
     ///
     /// # Errors
