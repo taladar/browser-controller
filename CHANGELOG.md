@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.5 - 2026-11-21 17:31:34Z
+
+### 🚀 Features
+
+- *(tabs)* Move tabs to another window
+
 ## 0.2.4 - 2026-11-21 12:14:59Z
 
 ### 🚀 Features
