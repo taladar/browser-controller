@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.4 - 2026-11-21 12:14:58Z
+
+### 🐛 Bug Fixes
+
+- *(dependencies)* Replace unmaintained humantime with fundu
+
+### ⚙️ Miscellaneous Tasks
+
+- *(dependencies)* Update dependencies
+
 ## 0.2.3 - 2026-11-16 15:21:33Z
 
 ### 🐛 Bug Fixes

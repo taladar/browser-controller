@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.4 - 2026-11-21 12:14:59Z
+
+### 🚀 Features
+
+- *(tests)* Give test browsers a distinct app-id
+
+### 🐛 Bug Fixes
+
+- *(dependencies)* Replace unmaintained humantime with fundu
+- *(extension)* Clamp the forward history count to zero
+
+### ⚙️ Miscellaneous Tasks
+
+- *(dependencies)* Update dependencies
+
 ## 0.2.3 - 2026-11-16 15:21:34Z
 
 ### 🐛 Bug Fixes

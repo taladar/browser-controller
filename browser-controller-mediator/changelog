@@ -1,3 +1,9 @@
+browser-controller-mediator (0.2.4-1) unstable; urgency=medium
+
+  * Bug fixes - dependencies - Replace unmaintained humantime with fundu
+  * Miscellaneous tasks - dependencies - Update dependencies
+
+ -- Matthias Hörmann <mhoermann@gmail.com>  Sat, 21 Nov 2026 13:14:59 +0100
 browser-controller-mediator (0.2.3-1) unstable; urgency=medium
 
   * Bug fixes - mediator - Survive undeserializable messages from the extension
