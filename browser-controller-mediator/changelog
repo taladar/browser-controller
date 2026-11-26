@@ -1,3 +1,8 @@
+browser-controller-mediator (0.2.6-1) unstable; urgency=medium
+
+  * Miscellaneous tasks - dependencies - Update dependencies
+
+ -- Matthias Hörmann <mhoermann@gmail.com>  Thu, 26 Nov 2026 19:20:56 +0100
 browser-controller-mediator (0.2.5-1) unstable; urgency=medium
 
   * Features - tabs - Move tabs to another window
