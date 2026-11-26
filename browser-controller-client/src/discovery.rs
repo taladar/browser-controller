@@ -164,11 +164,20 @@ async fn query_instance(socket_path: &Path) -> Result<BrowserInfo, DiscoveryErro
 }
 
 /// Check whether a process with the given PID is currently running.
+///
+/// If the process list cannot be read, the process is assumed to be alive so
+/// that a possibly live socket is not removed; the connection attempt then
+/// decides.
 fn is_pid_alive(pid: u32) -> bool {
-    let s = sysinfo::System::new_with_specifics(
+    match sysinfo::System::new_with_specifics(
         sysinfo::RefreshKind::nothing().with_processes(sysinfo::ProcessRefreshKind::nothing()),
-    );
-    s.process(sysinfo::Pid::from_u32(pid)).is_some()
+    ) {
+        Ok(s) => s.process(sysinfo::Pid::from_u32(pid)).is_some(),
+        Err(e) => {
+            tracing::debug!(pid = pid, error = %e, "Cannot read process list; assuming process is alive");
+            true
+        }
+    }
 }
 
 /// Extract the PID encoded in a socket/marker filename (e.g. `12345.sock` → `12345`).

@@ -587,7 +587,8 @@ fn chrome_profile_id_from_args(args: &[&str]) -> Option<String> {
 fn parent_pid() -> Result<u32, Error> {
     let sys = sysinfo::System::new_with_specifics(
         sysinfo::RefreshKind::nothing().with_processes(sysinfo::ProcessRefreshKind::nothing()),
-    );
+    )
+    .map_err(|e| Error::NoPpid(format!("cannot read process list: {e}")))?;
     let our_pid = sysinfo::get_current_pid()
         .map_err(|e| Error::NoPpid(format!("cannot determine own PID: {e}")))?;
     sys.process(our_pid)
@@ -604,7 +605,9 @@ fn parent_pid() -> Result<u32, Error> {
 fn read_parent_profile_id(ppid: u32) -> Option<String> {
     let sys = sysinfo::System::new_with_specifics(sysinfo::RefreshKind::nothing().with_processes(
         sysinfo::ProcessRefreshKind::nothing().with_cmd(sysinfo::UpdateKind::Always),
-    ));
+    ))
+    .inspect_err(|e| tracing::warn!(error = %e, "Cannot read process list"))
+    .ok()?;
     let process = sys.process(sysinfo::Pid::from_u32(ppid))?;
     let args: Vec<&str> = process.cmd().iter().filter_map(|s| s.to_str()).collect();
 
