@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.7 - 2026-11-26 20:09:28Z
+
+### ⚙️ Miscellaneous Tasks
+
+- *(dependencies)* Drop the unused time workspace dependency
+
 ## 0.2.6 - 2026-11-26 18:20:55Z
 
 ### ⚙️ Miscellaneous Tasks

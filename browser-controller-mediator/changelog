@@ -1,3 +1,8 @@
+browser-controller-mediator (0.2.7-1) unstable; urgency=medium
+
+  * Miscellaneous tasks - dependencies - Drop the unused time workspace dependency
+
+ -- Matthias Hörmann <mhoermann@gmail.com>  Thu, 26 Nov 2026 21:09:29 +0100
 browser-controller-mediator (0.2.6-1) unstable; urgency=medium
 
   * Miscellaneous tasks - dependencies - Update dependencies

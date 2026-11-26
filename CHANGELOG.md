@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.7 - 2026-11-26 20:09:29Z
+
+### 🐛 Bug Fixes
+
+- *(extension)* Keep a tab reopened in another container in its window
+
+### ⚙️ Miscellaneous Tasks
+
+- *(dependencies)* Drop the unused time workspace dependency
+
 ## 0.2.6 - 2026-11-26 18:20:56Z
 
 ### ⚙️ Miscellaneous Tasks
