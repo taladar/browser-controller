@@ -785,6 +785,113 @@ async function cmdListTabs(windowId) {
 }
 
 /**
+ * Whether `url` targets the same page as `expectUrl`, comparing origin and
+ * pathname only so query-string / redirect differences and URL re-encoding
+ * don't defeat the detection of a container reopen. Always false for a blank
+ * tab (`expectUrl` null or about:blank) or a tab without a URL yet.
+ */
+function targetsSamePage(url, expectUrl) {
+  if (expectUrl === null || expectUrl === "about:blank" || !url) return false;
+  try {
+    const a = new URL(url);
+    const b = new URL(expectUrl);
+    return a.origin === b.origin && a.pathname === b.pathname;
+  } catch (_e) {
+    return url === expectUrl;
+  }
+}
+
+/**
+ * How long after opening a tab a container reopen of it is followed back into
+ * the requested window. Multi-Account Containers reopens within milliseconds
+ * of the first navigation; the margin covers a slow start of the request.
+ */
+const CONTAINER_REOPEN_FOLLOW_MS = 15_000;
+
+/**
+ * Keep a freshly-opened tab in its window when an extension such as
+ * Multi-Account Containers reopens it in another container.
+ *
+ * Multi-Account Containers reacts to the navigation of a site assigned to a
+ * container by creating a new tab in that container and closing the original,
+ * but it calls `tabs.create` without a `windowId`. Firefox then puts the new
+ * tab into the most recently activated normal window, which is not the window
+ * the tab was opened in whenever another browser window was used last (and on
+ * Wayland, Firefox's idea of the last activated window is often not even the
+ * focused one). The tab thus briefly shows in the requested window and then
+ * jumps to a seemingly random one.
+ *
+ * For up to {@link CONTAINER_REOPEN_FOLLOW_MS} this watches for a tab created
+ * after the original that targets the same page in a *different* container
+ * (which tells a reopen apart from the user opening the same URL again) and
+ * moves it back to the original's position in `windowId`, activating it
+ * unless the tab was opened in the background. Only the first such tab is
+ * followed.
+ *
+ * @param {object} originalTab  The tab as opened, already in `windowId`.
+ * @param {Set<number>} preexisting  Ids of the tabs that existed before the
+ *   original was created; taken before `tabs.create` because the reopen can
+ *   happen before that call returns.
+ * @param {number} windowId  The window the tab was requested in.
+ * @param {string|null} expectUrl  The URL it was opened with (credentials
+ *   stripped), or null for a blank tab.
+ * @param {boolean} background  Whether the tab was opened in the background.
+ * @returns {Promise<void>} Resolves once the reopened tab was moved back, or
+ *   when the follow period ends without a reopen.
+ */
+async function followContainerReopen(originalTab, preexisting, windowId, expectUrl, background) {
+  if (!isFirefox || expectUrl === null || expectUrl === "about:blank") return;
+  preexisting = new Set(preexisting);
+  preexisting.add(originalTab.id);
+  const isReopen = (tab) =>
+    !preexisting.has(tab.id) &&
+    tab.cookieStoreId !== originalTab.cookieStoreId &&
+    targetsSamePage(tab.url, expectUrl);
+
+  await new Promise((resolve) => {
+    let handled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      browser.tabs.onCreated.removeListener(onCreated);
+      browser.tabs.onUpdated.removeListener(onUpdated);
+    };
+    const bringBack = async (tab) => {
+      if (handled) return;
+      handled = true;
+      cleanup();
+      try {
+        if (tab.windowId !== windowId) {
+          await browser.tabs.move(tab.id, { windowId, index: originalTab.index });
+          if (!background) await browser.tabs.update(tab.id, { active: true });
+        }
+      } catch (e) {
+        console.warn(`could not move reopened tab ${tab.id} to window ${windowId}:`, e);
+      }
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, CONTAINER_REOPEN_FOLLOW_MS);
+    // The URL may only be set by a later update: a tab created with a URL can
+    // report about:blank until its load starts.
+    function onCreated(tab) {
+      if (isReopen(tab)) bringBack(tab);
+    }
+    function onUpdated(_tabId, _changeInfo, tab) {
+      if (isReopen(tab)) bringBack(tab);
+    }
+    browser.tabs.onCreated.addListener(onCreated);
+    browser.tabs.onUpdated.addListener(onUpdated);
+    // The reopen may have happened before the listeners were added.
+    browser.tabs.query({}).then((tabs) => {
+      const reopened = tabs.find(isReopen);
+      if (reopened) bringBack(reopened);
+    });
+  });
+}
+
+/**
  * Wait for a freshly-opened tab to finish loading and return its final tab
  * object.
  *
@@ -827,18 +934,7 @@ async function waitForOpenedTabLoad(initialTab, expectUrl, timeoutMs) {
     if (requireRealUrl && (!tab.url || tab.url === "about:blank")) return false;
     return true;
   };
-  // Match on origin + pathname so query-string / redirect differences and URL
-  // re-encoding don't defeat replacement detection.
-  const matchesUrl = (url) => {
-    if (!requireRealUrl || !url) return false;
-    try {
-      const a = new URL(url);
-      const b = new URL(expectUrl);
-      return a.origin === b.origin && a.pathname === b.pathname;
-    } catch (_e) {
-      return url === expectUrl;
-    }
-  };
+  const matchesUrl = (url) => targetsSamePage(url, expectUrl);
 
   // Fast path: already fully loaded.
   try {
@@ -965,6 +1061,7 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, us
   if (cleanUrl !== null) {
     createProps.url = cleanUrl;
   }
+  const preexisting = new Set((await browser.tabs.query({})).map((t) => t.id));
   let tab = await browser.tabs.create(createProps);
 
   // On Wayland, the compositor may block Firefox's attempt to activate the target
@@ -983,6 +1080,12 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, us
     const moved = await browser.tabs.move(tab.id, { windowId, index: moveIndex });
     tab = Array.isArray(moved) ? moved[0] : moved;
   }
+
+  // A container reopen would put the tab into whatever window was activated
+  // last; bring it back. Not awaited unless waiting for the load: without a
+  // reopen this only ends after the follow period.
+  const following = followContainerReopen(tab, preexisting, windowId, cleanUrl, background);
+  following.catch((e) => console.warn("following a container reopen failed:", e));
 
   // When credentials are provided, schedule cleanup of the pending
   // credentials entry.  The onAuthRequired listener will use the
@@ -1006,6 +1109,16 @@ async function cmdOpenTab(windowId, insertBeforeTabId, insertAfterTabId, url, us
       throw new Error("Opened tab was closed before it finished loading");
     }
     tab = loaded;
+    // A reopened tab in another window is being moved back; report it where
+    // it ends up.
+    if (tab.windowId !== windowId) {
+      await following;
+      try {
+        tab = await browser.tabs.get(tab.id);
+      } catch (_e) {
+        /* keep the loaded copy */
+      }
+    }
   }
 
   return { type: "Tab", ...await serializeTabDetails(tab) };

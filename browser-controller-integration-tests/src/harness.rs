@@ -91,6 +91,21 @@ impl Harness {
     ///
     /// Returns an [`Error`] if any step fails.
     pub async fn start(browser: browser::Kind) -> Result<Self, Error> {
+        Self::start_with_extensions(browser, &[]).await
+    }
+
+    /// Start the full test stack like [`Harness::start`], additionally
+    /// installing the unpacked extensions in `extra_extensions` (Firefox only)
+    /// after the browser-controller extension, e.g. stand-ins for third-party
+    /// extensions whose interaction a test exercises.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Error`] if any step fails.
+    pub async fn start_with_extensions(
+        browser: browser::Kind,
+        extra_extensions: &[PathBuf],
+    ) -> Result<Self, Error> {
         // 1. Verify manifest exists (for Firefox; Chrome manifest is patched below)
         if browser == browser::Kind::Firefox
             && let Some(missing) = profile::check_manifest(browser)
@@ -157,6 +172,9 @@ impl Harness {
 
         // 9. Install extension (Firefox: BiDi; Chrome: already loaded via --load-extension)
         let _extension_id = bidi::install_extension(&mut bidi_session, browser, &ext.path).await?;
+        for extra in extra_extensions {
+            let _extra_id = bidi::install_extension(&mut bidi_session, browser, extra).await?;
+        }
 
         // 10. Wait for new mediator socket
         let mediator_socket =
@@ -275,8 +293,25 @@ pub async fn run<F>(browser: browser::Kind, test: F)
 where
     F: for<'a> FnOnce(&'a Harness) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>>,
 {
+    run_with_extensions(browser, &[], test).await;
+}
+
+/// Like [`run`], with the unpacked extensions in `extra_extensions` installed
+/// as well (see [`Harness::start_with_extensions`]).
+///
+/// # Panics
+///
+/// See [`run`].
+#[expect(
+    clippy::future_not_send,
+    reason = "integration tests are single-threaded"
+)]
+pub async fn run_with_extensions<F>(browser: browser::Kind, extra_extensions: &[PathBuf], test: F)
+where
+    F: for<'a> FnOnce(&'a Harness) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>>,
+{
     #[expect(clippy::panic, reason = "test harness failure is unrecoverable")]
-    let harness = match Harness::start(browser).await {
+    let harness = match Harness::start_with_extensions(browser, extra_extensions).await {
         Ok(h) => h,
         Err(e) => panic!("failed to start test harness: {e}"),
     };
