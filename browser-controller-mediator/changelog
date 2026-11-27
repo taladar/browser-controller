@@ -1,3 +1,8 @@
+browser-controller-mediator (0.2.8-1) unstable; urgency=medium
+
+  * Miscellaneous tasks - dependencies - Update webdriverbidi to 0.5
+
+ -- Matthias Hörmann <mhoermann@gmail.com>  Fri, 27 Nov 2026 20:28:52 +0100
 browser-controller-mediator (0.2.7-1) unstable; urgency=medium
 
   * Miscellaneous tasks - dependencies - Drop the unused time workspace dependency

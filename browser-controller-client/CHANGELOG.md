@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.8 - 2026-11-27 19:28:51Z
+
+### ⚙️ Miscellaneous Tasks
+
+- *(dependencies)* Update webdriverbidi to 0.5
+
 ## 0.2.7 - 2026-11-26 20:09:28Z
 
 ### ⚙️ Miscellaneous Tasks
