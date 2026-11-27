@@ -17,7 +17,7 @@ tempfile = "3"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-webdriverbidi = "0.2.2"
+webdriverbidi = "0.5.0"
 which = "8"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
